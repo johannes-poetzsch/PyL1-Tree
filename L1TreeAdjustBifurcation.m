@@ -155,7 +155,7 @@ while true
                         else
                             point_1 = tempBranch.Curve(j-1,:);
                             point_2 = tempBranch.Curve(j,:);
-                            ranchSegments_1 = [branchSegments_1;[point_1,point_2,associatedBranchIDs(l)]];
+                            branchSegments_1 = [branchSegments_1;[point_1,point_2,associatedBranchIDs(l)]];
                         end
                     end
                     if (associatedBranchIDs(l) == associatedBranchIDs(i)) && (selectID ~= 1)
