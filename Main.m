@@ -45,48 +45,46 @@ parameters = L1TreeInitialization();    % You can customise the parameter values
 fileName = 'Tree_1';    % Please ensure the Tree_1.txt file is in the Data folder
 
 %% Select seed points
+disp("seed point generation")
+tic
 [tlsPoints,paths,parameters] = L1TreeExtractPaths(fileName,parameters);
 [seedPoints,tlsPoints] = L1TreeExtractSeedPoints(tlsPoints,paths,parameters);
+toc
 
 %% Run the built-in L1-Median algorithm and extract the initial skeleton
-globalBar = waitbar(0,'L_1 Median: Start');    % The globalBar is used to show the step being execuated by the L1-Tree algorithm
-iterationNum = 0;
-skeletonBranches = [];
-skeletonPoints = seedPoints;
-maxIterationNum = ceil(log(parameters.baseRadius*2/parameters.searchRange)/log(parameters.iterationSpeed + 1))*parameters.maxIterationNumFixedRange;
-tlsPoints = L1MedianCalculateDensity(tlsPoints,parameters,globalBar,iterationNum,maxIterationNum);
-while parameters.searchRange <= parameters.baseRadius*2
-    iterationNumFixedRange = 0;
-    averageMovingDistance = 0;
-    while iterationNumFixedRange < parameters.maxIterationNumFixedRange
-        localBar = waitbar(0,'One iteration: start','Position',[100,100,270,60]);    % The localBar is used to show the information about the current iteration, including the search range, the iteration number, and the average moving distance
-        skeletonPoints = L1MedianSkeletonNeighbors(skeletonPoints,tlsPoints,parameters,localBar);
-        skeletonPoints = L1MedianCalculateSigma(skeletonPoints,parameters,localBar);
-        skeletonPoints = L1MedianCalculateAverageTerm(skeletonPoints,parameters,localBar);
-        skeletonPoints = L1MedianCalculateRepulsionTerm(skeletonPoints,parameters,localBar);
-        [skeletonPoints,averageMovingDistance] = L1MedianUpdateSkeletonPoints(skeletonPoints,parameters,localBar);
-        iterationNumFixedRange = iterationNumFixedRange + 1;
-        iterationNum = iterationNum + 1;
-        close(localBar);
-        showInfo = ['L_1 Median: ',num2str(parameters.searchRange),' ',num2str(iterationNumFixedRange),' ',num2str(averageMovingDistance)];
-        waitbar(iterationNum/maxIterationNum,globalBar,showInfo);
-    end
-    skeletonPoints = L1MedianRemoveSkeletonPoints(skeletonPoints,parameters,globalBar,iterationNum,maxIterationNum);
-    skeletonPoints = L1MedianSmoothSigma(skeletonPoints,parameters,globalBar,iterationNum,maxIterationNum);
-    [newBranches,skeletonPoints] = L1MedianSearchNewBranches(skeletonPoints,parameters,globalBar,iterationNum,maxIterationNum);
-    skeletonBranches = [skeletonBranches,newBranches];
-    parameters.searchRange = parameters.searchRange*(1 + parameters.iterationSpeed);
-end
-close(globalBar);
+disp("L1 median algorithm")
+tic
+[skeletonBranches, skeletonPoints, tlsPoints] = L1MedianAlgorithm(seedPoints, tlsPoints, parameters);
+toc
 
 %% Optimize the skeleton and construct 3D tree model
 globalBar = waitbar(0,'MST optimize: Start');
+disp("L1TreeConnect")
+tic
 [treeModel,tlsPoints] = L1TreeConnect(skeletonBranches,skeletonPoints,tlsPoints,parameters,globalBar);
+toc
+disp("L1TreePruneBranches")
+tic
 [treeModel,tlsPoints] = L1TreePruneBranches(treeModel,tlsPoints,parameters,globalBar);
+toc
+disp("L1TreeAdjustBifurcation")
+save("L1TreeAdjustBifurcation_Input.mat", "treeModel", "tlsPoints", "parameters");
+tic
 [treeModel,tlsPoints] = L1TreeAdjustBifurcation(treeModel,tlsPoints,parameters,globalBar);
+toc
+save("L1TreeAdjustBifurcation_Output.mat", "treeModel", "tlsPoints");
+disp("L1TreeSmoothBranches")
+tic
 [treeModel,tlsPoints] = L1TreeSmoothBranches(treeModel,tlsPoints,parameters,globalBar);
+toc
+disp("L1TreeExtendSkeleton")
+tic
 [treeModel,tlsPoints] = L1TreeExtendSkeleton(treeModel,tlsPoints,parameters,globalBar);
+toc
+disp("L1TreeConstructModel")
+tic
 [treeModelCentrifugal,treeModelGaaliche] = L1TreeConstructModel(fileName,treeModel,tlsPoints,globalBar);
+toc
 close(globalBar);
 
 %% Draw 3D tree model
