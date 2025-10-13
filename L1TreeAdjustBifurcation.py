@@ -12,14 +12,15 @@ from src.utils.geometry import linesPointsDistances, normalizeVectors, vecdot
 from src.utils.parseMatlab import parse_struct, import_tree_model
 from src.utils.kernels import cum_min
 
-def adjust_bifurcations():
+def adjustBifurcations():
     eng = matlab.engine.start_matlab()
     eng.eval("load(\"L1TreeAdjustBifurcation_Input.mat\")", nargout=0)
     
     treeModel = import_tree_model(eng)
     parameters = parse_struct(eng, "parameters")
-    tlsPoints = cp.array(eng.eval("tlsPoints"))  # TODO branchIDs -1
+    #tlsPoints = cp.array(eng.eval("tlsPoints"))  # TODO branchIDs -1
     eng.exit()
+    print("finished import")
 
     adjustedBifurcationPoints = []
     while True:
@@ -27,14 +28,14 @@ def adjust_bifurcations():
         if bifurcationID is None:
             break
         
-        adjustBifurcation(bifurcationID, associatedBranches, parameters)
+        adjustment = determineAdjustment(bifurcationID, associatedBranches, parameters)
 
         break
 
 
-def adjustBifurcation(bifurcationID: npt.NDArray[np.double],
-                      associatedBranches: List[Branch],
-                      parameters: Dict[str, any]):
+def determineAdjustment(bifurcationID: npt.NDArray[np.double],
+                        associatedBranches: List[Branch],
+                        parameters: Dict[str, any]):
     parentBranch: Branch = min(associatedBranches, key=lambda b: b.cenOrder)
 
     for branch in associatedBranches:
@@ -51,21 +52,62 @@ def adjustBifurcation(bifurcationID: npt.NDArray[np.double],
         firstSegmentDistance, restBranchDistance = branch.getPartDistances(tlsPoints)
         firstSegmentDistances[branch] = firstSegmentDistance # (N,3)
         restBranchDistances[branch] = restBranchDistance # (N,3)
-    isAtOriginalBifurcation = (cp.min(cp.stack(firstSegmentDistances.values()), axis=0) 
-                               < cp.min(cp.stack(restBranchDistances.values()), axis=0))
 
     targetPoints = {}
-    isCredible = {}
+    newBifurcationLength = {}
+    removedSegmentsLength = {}
+    skip = {}
+    isCredible: Dict[Branch, npt.NDArray[np.bool]] = {}
     for targetBranch in associatedBranches:
+        otherBranches = [b for b in associatedBranches if b is not targetBranch]
         targetPoints[targetBranch] = targetBranch.getInterpolation(parameters["resolution"]) # includes current bifurcation as invalid target point
         isCredible[targetBranch] = isBifurcationCredible(targetPoints[targetBranch], targetBranch, parentBranch, associatedBranches,
                                                          parameters["minAngleThreshold"], parameters["maxAngleThreshold"])
+        newBifurcationLength[targetBranch], removedSegmentsLength[targetBranch] = getLengthMetrics(targetPoints[targetBranch], 
+                                                                                                   otherBranches, 
+                                                                                                   isCredible[targetBranch])
+        skip[targetBranch] = cp.count_nonzero(isCredible[targetBranch]) == 0
         
+    newDistancesSums = {}
+    distancesToRemovedSegmentsSums = {}
+    distancesToNewBifurcationSums = {}
+    distancesCounts = {}
     # TODO: iterate over tlsPoints batches
     for pointBatch in [tlsPoints]:
         for targetBranch in associatedBranches:
-            getDistanceMetrics(targetPoints[targetBranch], targetBranch, associatedBranches, pointBatch, isCredible[targetBranch],
-                               firstSegmentDistances, restBranchDistances, isAtOriginalBifurcation)
+            if skip[targetBranch]:
+                continue
+
+            otherBranches = [b for b in associatedBranches if b is not targetBranch]
+            newDistancesSum, distancesToRemovedSegmentsSum, distancesToNewBifurcationSum, distancesCount = getDistanceMetrics(
+                targetPoints[targetBranch], otherBranches, pointBatch, 
+                isCredible[targetBranch], firstSegmentDistances, restBranchDistances)
+            
+            if targetBranch in distancesCounts:
+                newDistancesSums[targetBranch] += newDistancesSum
+                distancesToRemovedSegmentsSums[targetBranch] += distancesToRemovedSegmentsSum
+                distancesToNewBifurcationSums[targetBranch] += distancesToNewBifurcationSum
+                distancesCounts[targetBranch] += distancesCount
+            else:
+                newDistancesSums[targetBranch] = newDistancesSum
+                distancesToRemovedSegmentsSums[targetBranch] = distancesToRemovedSegmentsSum
+                distancesToNewBifurcationSums[targetBranch] = distancesToNewBifurcationSum
+                distancesCounts[targetBranch] = distancesCount
+
+    for targetBranch in associatedBranches:
+        if skip[targetBranch]:
+            continue
+
+        meanDistancesToRemovedSegments = distancesToRemovedSegmentsSums[targetBranch] / distancesCounts[targetBranch]
+        meanDistancesToNewBifurcation = distancesToNewBifurcationSums[targetBranch] / distancesCounts[targetBranch]
+
+        relativeDistanceChange = cp.abs((meanDistancesToRemovedSegments - meanDistancesToNewBifurcation) / meanDistancesToNewBifurcation)
+        relativeLengthChange = cp.abs((removedSegmentsLength[targetBranch] - newBifurcationLength[targetBranch]) / removedSegmentsLength[targetBranch])
+
+        meetsCriteria = cp.logical_and(
+            meanDistancesToNewBifurcation < meanDistancesToRemovedSegments,
+            relativeDistanceChange > relativeLengthChange
+        )
 
 
 def findBifurcation(treeModel: List[Branch], 
@@ -163,33 +205,63 @@ def isBifurcationCredible(targetPoints: npt.NDArray[np.double],
     isCredible = cp.all(cp.stack(anglesAtBifurcationCredible + 
                                  anglesAfterBifurcationCredible + 
                                  anglesBetweenChildBranchesCredible), axis=0)
-    isCredible[0] = False
-    return isCredible
+    return isCredible[1:]
+
+
+def getLengthMetrics(targetPoints: npt.NDArray,
+                     otherBranches: List[Branch],
+                     isCredible: npt.NDArray[np.bool]
+                     ) -> Tuple[npt.NDArray, npt.NDArray]:
+    newBifurcationLength = cp.sum(cp.stack([cp.linalg.norm(targetPoints[1:][isCredible] - b.skeletonPoints[1], axis=1) for b in otherBranches]), axis=0)
+
+    targetBifurcationSegmentLength = cp.cumsum(np.linalg.norm(targetPoints - cp.roll(targetPoints, -1, axis=0), axis=1))[:-1][isCredible]
+    otherBifurcationSegmentsLength = cp.sum(cp.stack([cp.linalg.norm(b.skeletonPoints[0] - b.skeletonPoints[1]) for b in otherBranches]))
+    removedSegmentsLength = targetBifurcationSegmentLength + otherBifurcationSegmentsLength
+
+    return newBifurcationLength, removedSegmentsLength
 
 
 def getDistanceMetrics(targetPoints: npt.NDArray,
-                       targetBranch: Branch,
-                       associatedBranches: List[Branch],
+                       otherBranches: List[Branch],
                        tlsPoints: npt.NDArray,
                        isCredible: npt.NDArray[np.bool],
                        firstSegmentDistances: Dict[Branch, npt.NDArray],
-                       restBranchDistances: Dict[Branch, npt.NDArray],
-                       isAtOriginalBifurcation: npt.NDArray[np.bool]):
-    otherBranches = [b for b in associatedBranches if b is not targetBranch]
-
+                       restBranchDistances: Dict[Branch, npt.NDArray]
+                       ) -> Tuple[npt.NDArray, npt.NDArray, npt.NDArray, npt.NDArray]:
     # Distances to the new segments between the new bifurcation points (targetPoints) and the first remaining skeleton points of the other branches
-    distancesToNewSegments = cp.min(cp.stack([linesPointsDistances(b.skeletonPoints[1], targetPoints[1:], tlsPoints) 
-                                              for b in associatedBranches if b is not targetBranch]),
-                                    axis=0)
+    distancesToNewBifurcation = cp.min(cp.stack([linesPointsDistances(b.skeletonPoints[1], targetPoints[1:][isCredible], tlsPoints) 
+                                                 for b in otherBranches]),
+                                       axis=0)
     
     targetDistances = linesPointsDistances(targetPoints[:-1], # (T,N)
                                            cp.roll(targetPoints, -1, axis=0)[:-1], 
                                            tlsPoints)
     
     distancesUntilTargets = cum_min(targetDistances, axis=0, reversed=False) # (T,N)
+    distancesToRemovedSegments = cp.minimum(distancesUntilTargets[isCredible], 
+                                            cp.min(cp.stack([firstSegmentDistances[b] for b in otherBranches]), axis=0))
+    del(distancesUntilTargets)
+
     distancesFromTargets = cum_min(targetDistances, axis=0, reversed=True) # (T,N)
-    
+    del(targetDistances)
+    distancesFromTargets = cp.roll(distancesFromTargets, -1, axis=0)
+    distancesFromTargets[-1] = cp.inf
+
+    distancesToUnaffectedSegments = cp.minimum(distancesFromTargets[isCredible],
+                                               cp.min(cp.stack([restBranchDistances[b] for b in otherBranches]), axis=0))
+    del(distancesFromTargets)
+
+    isAtBifurcation = cp.logical_or(distancesToRemovedSegments < distancesToUnaffectedSegments,
+                                    distancesToNewBifurcation < distancesToUnaffectedSegments)
+
+    distancesToRemovedSegmentsSum = cp.sum(cp.where(isAtBifurcation, distancesToRemovedSegments, 0), axis=1)
+    distancesToNewBifurcationSum = cp.sum(cp.where(isAtBifurcation, distancesToNewBifurcation, 0), axis=1)
+    distancesCount = cp.count_nonzero(isAtBifurcation, axis=1)
+
+    newDistancesSum = cp.sum(cp.minimum(distancesToNewBifurcation, distancesToUnaffectedSegments), axis=1)
+
+    return newDistancesSum, distancesToRemovedSegmentsSum, distancesToNewBifurcationSum, distancesCount
 
 
 if __name__ == '__main__':
-    adjust_bifurcations()
+    adjustBifurcations()
