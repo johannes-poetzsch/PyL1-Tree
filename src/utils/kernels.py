@@ -27,6 +27,9 @@ revCumMin = cp.RawKernel(r'''
 def cum_min(x: npt.NDArray[cp.double], 
             axis: int = 0,
             reversed: bool = False):
+    if cp.get_array_module(x) is not cp:
+        raise ValueError("Cuda kernels should only be used for arrays on the GPU.")
+
     if x.ndim == 1:
         x = x.copy()
         if x.shape[0] > 1024:

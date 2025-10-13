@@ -8,6 +8,7 @@ def normalizeVectors(vectors: npt.NDArray):
     axis = vectors.ndim - 1
     vectors /= xp.expand_dims(xp.linalg.norm(vectors, axis=axis), axis=axis)
 
+
 def vecdot(a: npt.NDArray,
            b: npt.NDArray) -> npt.NDArray:
     xp = cp.get_array_module(a, b)
@@ -19,7 +20,8 @@ def vecdot(a: npt.NDArray,
         return xp.einsum('ij,ij->i', a, b)
     else:
         raise ValueError("Unexpected Number of dimensions for dot product calculation")
-    
+
+
 def linesPointsDistances(lineStartPoints: npt.NDArray, # (L,D) or (D)
                          lineEndPoints: npt.NDArray, # (L,D)
                          points: npt.NDArray) -> npt.NDArray: # (N,D)
@@ -35,3 +37,10 @@ def linesPointsDistances(lineStartPoints: npt.NDArray, # (L,D) or (D)
     distances = xp.linalg.norm(closestPointsOnLines - points, axis=-1) # (L,N)
 
     return distances
+
+
+def angle(directions_a: npt.NDArray,
+          directions_b: npt.NDArray) -> npt.NDArray:
+    cos = np.vecdot(directions_a, directions_b)
+    cos = np.clip(cos, -1, 1)
+    return np.arccos(cos)    
