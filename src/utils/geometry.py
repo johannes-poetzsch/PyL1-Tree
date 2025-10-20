@@ -9,19 +9,6 @@ def normalizeVectors(vectors: npt.NDArray):
     vectors /= xp.expand_dims(xp.linalg.norm(vectors, axis=axis), axis=axis)
 
 
-def vecdot(a: npt.NDArray,
-           b: npt.NDArray) -> npt.NDArray:
-    xp = cp.get_array_module(a, b)
-    if b.ndim > a.ndim:
-        a, b = b, a
-    if b.ndim == 1:
-        return xp.dot(a,b)
-    elif b.ndim == 2:
-        return xp.einsum('ij,ij->i', a, b)
-    else:
-        raise ValueError("Unexpected Number of dimensions for dot product calculation")
-
-
 def linesPointsDistances(lineStartPoints: npt.NDArray, # (L,D) or (D)
                          lineEndPoints: npt.NDArray, # (L,D)
                          points: npt.NDArray) -> npt.NDArray: # (N,D)
@@ -29,6 +16,7 @@ def linesPointsDistances(lineStartPoints: npt.NDArray, # (L,D) or (D)
     lineVectors = lineEndPoints - lineStartPoints # (L,D)
 
     pointsToLineEndPoints = lineEndPoints[:,xp.newaxis] - points # (L,N,D)
+    # TODO: compare runtime to torch vecdot
     tMatrix = xp.einsum('LND,LD->LN', pointsToLineEndPoints, lineVectors) / xp.einsum('LD,LD->L', lineVectors, lineVectors)[:,xp.newaxis] # (L,N)
     del pointsToLineEndPoints
     xp.clip(tMatrix, 0, 1, out=tMatrix)
@@ -41,6 +29,7 @@ def linesPointsDistances(lineStartPoints: npt.NDArray, # (L,D) or (D)
 
 def angle(directions_a: npt.NDArray,
           directions_b: npt.NDArray) -> npt.NDArray:
+    # TODO: compare to torch vecdot
     cos = np.vecdot(directions_a, directions_b)
-    cos = np.clip(cos, -1, 1)
+    np.clip(cos, -1, 1, out=cos)
     return np.arccos(cos)    

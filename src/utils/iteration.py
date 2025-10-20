@@ -1,0 +1,13 @@
+from collections import deque
+
+from ..objects.branch import Branch
+
+def beadthFirstSearch(stem: Branch, returnLeaves: bool = True):
+    remainingBranches = deque()
+    remainingBranches.append(stem)
+
+    while remainingBranches:
+        branch: Branch = remainingBranches.pop()
+        remainingBranches.extend(branch.children)
+        if returnLeaves or len(branch.children) > 0:
+            yield branch
