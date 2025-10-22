@@ -2,7 +2,7 @@ from collections import deque
 
 from ..objects.branch import Branch
 
-def beadthFirstSearch(stem: Branch, returnLeaves: bool = True):
+def breadthFirstSearch(stem: Branch, returnLeaves: bool = True):
     remainingBranches = deque()
     remainingBranches.append(stem)
 

@@ -100,7 +100,7 @@ class Branch:
         if len(segmentDistances) > 1:
             restBranchDistances = xp.min(segmentDistances[1:], axis=0)
         else:
-            restBranchDistances = xp.empty(segmentDistances.shape[1], dtype=xp.double)
+            restBranchDistances = xp.full(segmentDistances.shape[1], xp.inf, dtype=xp.double)
 
         return firstSegmentDistances, restBranchDistances
     
