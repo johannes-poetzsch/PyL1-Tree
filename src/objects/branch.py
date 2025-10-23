@@ -26,24 +26,8 @@ class Branch:
         self.children: set[Branch] = set()
         self.parent: Branch = None
         self.setParent(parent)
-        self.updateBoundingBox()
+        self.updateSkeletonMeasurements()
         self.isRemoved = False
-
-
-    def hasEnd(self, endId: int):
-        return self.skeletonIDs[0] == endId or self.skeletonIDs[-1] == endId
-
-
-    def toGPU(self):
-        if not self.onGPU:
-            self.onGPU = True
-            self.tlsPoints = cp.asarray(self.tlsPoints)
-
-
-    def toCPU(self):
-        if self.onGPU:
-            self.onGPU = False
-            self.tlsPoints = cp.asnumpy(self.tlsPoints)
 
 
     def unflip(self):
@@ -87,9 +71,7 @@ class Branch:
     def getSegmentDistances(self, points: npt.NDArray[np.double]) -> npt.NDArray[np.double]:
         xp = cp.get_array_module(points)
         skeletonPoints = xp.asarray(self.skeletonPoints)
-        segmentDistances = linesPointsDistances(skeletonPoints[:-1],
-                                                xp.roll(skeletonPoints, -1, axis=0)[:-1],
-                                                points)
+        segmentDistances = linesPointsDistances(skeletonPoints[:-1], skeletonPoints[1:], points)
         return segmentDistances
 
 
@@ -105,9 +87,13 @@ class Branch:
         return firstSegmentDistances, restBranchDistances
     
 
-    def updateBoundingBox(self):
+    def updateSkeletonMeasurements(self):
         self.__boundingBoxMin = np.min(self.skeletonPoints, axis=0)
         self.__boundingBoxMax = np.max(self.skeletonPoints, axis=0)
+
+        segments = self.skeletonPoints[1:] - self.skeletonPoints[:-1]
+        segmentLengths = np.linalg.norm(segments)
+        self.length = np.sum(segmentLengths)
 
 
     def getBoundingBoxDistance(self, boundingBoxMin, boundingBoxMax):
@@ -126,7 +112,7 @@ class Branch:
         self.skeletonPoints = np.concatenate((self.skeletonPoints, child.skeletonPoints))
         xp = cp.get_array_module(self.tlsPoints, child.tlsPoints)
         self.tlsPoints = xp.concatenate((self.tlsPoints, child.tlsPoints))
-        self.updateBoundingBox()
+        self.updateSkeletonMeasurements()
         child.remove()
 
 

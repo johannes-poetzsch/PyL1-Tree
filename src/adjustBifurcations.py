@@ -1,4 +1,5 @@
-import matlab.engine
+__all__ = ['adjustBifurcations']
+
 import cupy as cp
 import numpy as np
 import numpy.typing as npt
@@ -7,22 +8,13 @@ import torch
 from itertools import combinations
 from typing import Dict, List, Optional, Tuple
 
-from src.objects.branch import Branch
-from src.utils.geometry import linesPointsDistances, normalizeVectors, angle
-from src.utils.iteration import breadthFirstSearch
-from src.utils.parseMatlab import parse_struct, import_tree_model
-from src.utils.kernels import cum_min
+from .objects.branch import Branch
+from .utils.geometry import linesPointsDistances, normalizeVectors, angle
+from .utils.iteration import breadthFirstSearch
+#from src.utils.kernels import cum_min
 
-def adjustBifurcations():
-    eng = matlab.engine.start_matlab()
-    eng.eval("load(\"L1TreeAdjustBifurcation_Input.mat\")", nargout=0)
-    
-    treeModel, unassignedTlsPoints = import_tree_model(eng)
-    stem = treeModel[0]
-    parameters = parse_struct(eng, "parameters")
-    #tlsPoints = cp.array(eng.eval("tlsPoints"))  # TODO branchIDs -1
-    eng.exit()
-    print("finished import")
+
+def adjustBifurcations(stem, treeModel, parameters):
     xp = np
 
     for parent in breadthFirstSearch(stem, returnLeaves=False):
@@ -33,17 +25,13 @@ def adjustBifurcations():
             bifurcationId = parent.skeletonIDs[-1]
             associatedBranches = [parent] + list(parent.children)
 
+            # TODO: only flip parent
             for branch in associatedBranches:
                 # make sure bifurcation is start of each associated branch
                 branch.orientToBifurcation(bifurcationId)
-                if xp is cp:
-                    branch.toGPU()
             
-            tlsPoints = xp.concatenate([b.tlsPoints for b in associatedBranches])
+            tlsPoints = xp.asarray(xp.concatenate([b.tlsPoints for b in associatedBranches]))
             adjustmentIdx, adjustmentPoint, adjustmentBranch = determineAdjustment(associatedBranches, parent, tlsPoints, parameters)
-
-            for branch in associatedBranches:
-                branch.toCPU()
 
             if adjustmentIdx is None:
                 parent = None
@@ -52,10 +40,6 @@ def adjustBifurcations():
 
             for branch in associatedBranches:
                 branch.unflip()
-
-    print("finished adjusting bifurcations")
-    treeModel = list(breadthFirstSearch(stem))
-    print(len(treeModel))
 
 
 def determineAdjustment(associatedBranches: List[Branch],
@@ -169,7 +153,7 @@ def applyAdjustment(treeModel: List[Branch],
         branch.tlsPoints = np.empty([0,3], dtype=np.double)
         branch.skeletonIDs[0] = bifurcationId
         branch.skeletonPoints[0] = adjustmentPoint
-        branch.updateBoundingBox()
+        branch.updateSkeletonMeasurements()
         branch.unflip()
 
     newParent = None
@@ -332,9 +316,7 @@ def getDistanceMetrics(targetPoints: npt.NDArray[np.double],
                                                  for b in otherBranches]),
                                        axis=0)
     
-    targetDistances = linesPointsDistances(targetPoints[:-1], # (T,N)
-                                           xp.roll(targetPoints, -1, axis=0)[:-1], 
-                                           tlsPoints)
+    targetDistances = linesPointsDistances(targetPoints[:-1], targetPoints[1:], tlsPoints) # (T,N)
     
     if xp is cp:
         distancesUntilTargets = cp.asarray(torch.as_tensor(targetDistances, device='cuda').cummin(dim=0).values)
@@ -376,7 +358,3 @@ def getDistanceMetrics(targetPoints: npt.NDArray[np.double],
         associatedTlsCount = cp.asnumpy(associatedTlsCount)
 
     return newDistancesSum, associatedTlsToRemovedSegmentsSum, associatedTlsToNewBifurcationSum, associatedTlsCount
-
-
-if __name__ == '__main__':
-    adjustBifurcations()
