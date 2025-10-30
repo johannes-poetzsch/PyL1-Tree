@@ -1,6 +1,7 @@
 import matlab.engine
 
 from src.adjustBifurcations import adjustBifurcations
+from src.filterBranches import filterBranches
 from src.objects.branch import Branch
 from src.utils.iteration import breadthFirstSearch
 from src.utils.parseMatlab import parse_struct, import_tree_model
@@ -23,6 +24,8 @@ def main():
     print("finished adjusting bifurcations")
     treeModel = list(breadthFirstSearch(stem))
     print(len(treeModel))
+
+    filterBranches(stem, treeModel, parameters)
 
 
 if __name__ == '__main__':

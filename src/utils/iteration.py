@@ -1,8 +1,9 @@
 from collections import deque
+from typing import Generator
 
 from ..objects.branch import Branch
 
-def breadthFirstSearch(stem: Branch, returnLeaves: bool = True):
+def breadthFirstSearch(stem: Branch, returnLeaves: bool = True) -> Generator[Branch, None, None]:
     remainingBranches = deque()
     remainingBranches.append(stem)
 

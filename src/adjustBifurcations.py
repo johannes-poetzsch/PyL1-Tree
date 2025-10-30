@@ -36,7 +36,7 @@ def adjustBifurcations(stem, treeModel, parameters):
             if adjustmentIdx is None:
                 parent = None
             else:
-                parent = applyAdjustment(treeModel, associatedBranches, parent, adjustmentIdx, adjustmentPoint, adjustmentBranch, tlsPoints)
+                parent = applyAdjustment(stem, associatedBranches, parent, adjustmentIdx, adjustmentPoint, adjustmentBranch, tlsPoints)
 
             for branch in associatedBranches:
                 branch.unflip()
@@ -133,7 +133,7 @@ def determineAdjustment(associatedBranches: List[Branch],
     return adjustmentIdx, adjustmentPoint, adjustmentBranch
 
 
-def applyAdjustment(treeModel: List[Branch], 
+def applyAdjustment(stem: Branch, 
                     associatedBranches: List[Branch],
                     parentBranch: Branch,
                     adjustmentIdx: np.intp, 
@@ -162,57 +162,16 @@ def applyAdjustment(treeModel: List[Branch],
         newParent = adjustmentBranch.parent
         # branch can be removed
         del(associatedBranches[associatedBranches.index(adjustmentBranch)])
-        adjustmentBranch.remove()
+        adjustmentBranch.remove(adjustChildSkeletons=False)
         
         if len(parentBranch.children) == 1:
             parentBranch.expand()
 
-    # TODO: check runtime, batching
-    closeBranches = []
-    closestBranch = xp.empty(tlsPoints.shape[0], int)
-    minDistances = xp.full(tlsPoints.shape[0], xp.inf, dtype=xp.double)
-    for branch in associatedBranches:
-        distances = branch.getDistances(tlsPoints)
-        improved = distances < minDistances
-        idx = treeModel.index(branch)
-        closeBranches.append(idx)
-        closestBranch[improved] = idx
-        minDistances[improved] = distances[improved]
-
-    # if the distance to the bifurcation branches increased, another branch might be closer
-    worsened = minDistances > originalDistances
-    wClosestBranch = closestBranch[worsened]
-    wMinDistances = minDistances[worsened]
-    wTlsPoints = tlsPoints[worsened]
-    maxMinDistance = xp.max(wMinDistances)
-    wTlsMin = xp.min(wTlsPoints, axis=0)
-    wTlsMax = xp.max(wTlsPoints, axis=0)
-    if xp is cp:
-        wTlsMin = cp.asnumpy(wTlsMin)
-        wTlsMax = cp.asnumpy(wTlsMax)
-
-    for idx, branch in enumerate(treeModel):
-        if (branch.isRemoved or 
-            branch in associatedBranches or 
-            maxMinDistance < branch.getBoundingBoxDistance(wTlsMin, wTlsMax)):
-            continue
-
-        distances = branch.getDistances(wTlsPoints)
-        improved = distances < wMinDistances
-
-        if xp.count_nonzero(improved) > 0:
-            closeBranches.append(idx)
-            wClosestBranch[improved] = idx
-            wMinDistances[improved] = distances[improved]
-            maxMinDistance = xp.max(wMinDistances)
-
-    if xp is cp:
-        closestBranch = cp.asnumpy(closestBranch)
-        tlsPoints = cp.asnumpy(tlsPoints)
-
-    for idx in closeBranches:
-        branch: Branch = treeModel[idx]
-        branch.tlsPoints = np.concatenate((branch.tlsPoints, tlsPoints[closestBranch == idx]))
+    unassignedPoints = Branch.reassignPoints(tlsPoints, 
+                                             branches=list(breadthFirstSearch(stem)),
+                                             closeBranches=associatedBranches,
+                                             originalDistances=originalDistances)
+    assert(len(unassignedPoints) == 0)
 
     return newParent
 
