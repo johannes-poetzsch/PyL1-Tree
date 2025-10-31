@@ -167,11 +167,8 @@ def applyAdjustment(stem: Branch,
         if len(parentBranch.children) == 1:
             parentBranch.expand()
 
-    unassignedPoints = Branch.reassignPoints(tlsPoints, 
-                                             branches=list(breadthFirstSearch(stem)),
-                                             closeBranches=associatedBranches,
-                                             originalDistances=originalDistances)
-    assert(len(unassignedPoints) == 0)
+    Branch.reassignPoints(tlsPoints, branches=list(breadthFirstSearch(stem)),
+                          closeBranches=associatedBranches, originalDistances=originalDistances)
 
     return newParent
 
@@ -269,8 +266,8 @@ def getDistanceMetrics(targetPoints: npt.NDArray[np.double],
     # Distances to the new segments between the new bifurcation points (targetPoints) and the first remaining skeleton points of the other branches
     xp = cp.get_array_module(tlsPoints)
     targetPoints = xp.asarray(targetPoints)
-    distancesToNewBifurcation = xp.min(xp.stack([linesPointsDistances(xp.asarray(b.skeletonPoints[1]), 
-                                                                      targetPoints[1:][isCredible], 
+    distancesToNewBifurcation = xp.min(xp.stack([linesPointsDistances(targetPoints[1:][isCredible],
+                                                                      xp.asarray(b.skeletonPoints[1]), 
                                                                       tlsPoints)
                                                  for b in otherBranches]),
                                        axis=0)

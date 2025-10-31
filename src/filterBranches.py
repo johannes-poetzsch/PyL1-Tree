@@ -9,24 +9,27 @@ from .utils.geometry import angle, normalizeVectors, stripPointsDistances
 from .utils.iteration import breadthFirstSearch
 
 
-def filterBranches(stem: Branch, treeModel: List[Branch], parameters: dict) -> npt.NDArray[np.double]:
+def filterBranches(stem: Branch, parameters: dict) -> Optional[npt.NDArray[np.double]]:
     unassignedTlsPoints_1, closeBranches_1 = filterByLength(stem, parameters["branchSizeThreshold"], parameters["resolution"])
     pruneByAngle(stem, parameters["maxAngleThreshold"])
-    unassignedTlsPoints_2, closeBranches_2 = filterByInfluence(stem, executeRemoval=False)
+    unassignedTlsPoints_2, closeBranches_2 = filterByInfluence(stem)
 
     unassignedTlsPoints = unassignedTlsPoints_1 + unassignedTlsPoints_2
     closeBranches = closeBranches_1 + closeBranches_2
     prunedTlsPoints = []
-    
+
     branches = list(breadthFirstSearch(stem))
-    for idx, tlsPoints in unassignedTlsPoints:
-        prunedTlsPoints.append(Branch.reassignPoints(tlsPoints, branches, closeBranches[idx]))
+    for p, b in zip(unassignedTlsPoints, closeBranches):
+        Branch.reassignPoints(p, branches, b)
 
     for branch in branches:
         if branch.isRemoved:
             prunedTlsPoints.append(branch.remove())
 
-    return np.concatenate(prunedTlsPoints)
+    if len(prunedTlsPoints) == 0:
+        return None
+    else:
+        return np.concatenate(prunedTlsPoints)
 
 
 def filterByLength(stem: Branch,

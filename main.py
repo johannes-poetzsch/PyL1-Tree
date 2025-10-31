@@ -1,4 +1,6 @@
 import matlab.engine
+import numpy as np
+from typing import List
 
 from src.adjustBifurcations import adjustBifurcations
 from src.filterBranches import filterBranches
@@ -25,7 +27,12 @@ def main():
     treeModel = list(breadthFirstSearch(stem))
     print(len(treeModel))
 
-    filterBranches(stem, treeModel, parameters)
+    prunedTlsPoints = filterBranches(stem, parameters)
+
+    if prunedTlsPoints is not None:
+        unassignedTlsPoints = np.append(unassignedTlsPoints, prunedTlsPoints)
+
+    print("finished")
 
 
 if __name__ == '__main__':

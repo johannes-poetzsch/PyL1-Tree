@@ -8,8 +8,8 @@ def normalizeVectors(vectors: npt.NDArray):
     vectors /= xp.expand_dims(xp.linalg.norm(vectors, axis=-1), axis=-1)
 
 
-def linesPointsDistances(lineStartPoints: npt.NDArray, # (L,D) or (D)
-                         lineEndPoints: npt.NDArray, # (L,D)
+def linesPointsDistances(lineStartPoints: npt.NDArray, # (L,D)
+                         lineEndPoints: npt.NDArray, # (L,D) or (D)
                          points: npt.NDArray) -> npt.NDArray: # (N,D)
     xp = cp.get_array_module(lineStartPoints, lineEndPoints, points)
     lineVectors = lineStartPoints - lineEndPoints # (L,D)

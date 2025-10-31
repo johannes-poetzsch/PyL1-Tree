@@ -65,7 +65,7 @@ class Branch:
     def getDistances(self, points: npt.NDArray[np.double]) -> Tuple[npt.NDArray[np.double], npt.NDArray[np.double]]:
         xp = cp.get_array_module(points)
         segmentDistances = self.getSegmentDistances(points)
-        return xp.min(segmentDistances, axis=0)
+        return segmentDistances.min(axis=0)
 
 
     def getSegmentDistances(self, points: npt.NDArray[np.double]) -> npt.NDArray[np.double]:
@@ -120,7 +120,7 @@ class Branch:
 
 
     def isLeaf(self):
-        return len(self.children) > 0
+        return len(self.children) == 0
 
 
     def setParent(self, parent: Branch):
@@ -151,7 +151,7 @@ class Branch:
     @staticmethod
     def findClosest(points: npt.NDArray[np.double],
                     branches: List[Branch], 
-                    initialDistances: Optional[npt.NDArray[np.double]]):
+                    initialDistances: Optional[npt.NDArray[np.double]] = None):
         xp = cp.get_array_module(points)
         pointsMin = points.min(axis=0)
         pointsMax = points.max(axis=0)
@@ -173,12 +173,9 @@ class Branch:
             improved = dist < distances
 
             if xp.count_nonzero(improved) > 0:
-                if branch.isRemoved:
-                    closest[improved] = -2
-                else:
-                    closeIndices.append(idx)
-                    closest[improved] = idx
-                distances[improved] = dist
+                closeIndices.append(idx)
+                closest[improved] = idx
+                distances[improved] = dist[improved]
                 maxDistance = distances.max()
 
         if xp is cp:
@@ -191,8 +188,7 @@ class Branch:
     def reassignPoints(points: npt.NDArray[np.double],
                        branches: List[Branch],
                        closeBranches: Optional[List[Branch]] = None,
-                       originalDistances: Optional[npt.NDArray[np.double]] = None
-                       ) -> npt.NDArray[np.double]:
+                       originalDistances: Optional[npt.NDArray[np.double]] = None):
         if closeBranches is None and originalDistances is not None:
             raise ValueError("Close branches have to be provided to allow pruning using original distances.")
         xp = cp.get_array_module(points)
@@ -205,7 +201,9 @@ class Branch:
         if originalDistances is not None:
             worsened = xp.asarray(distances > originalDistances)
             closestIndices = xp.full(len(points), -1, dtype=int)
-            closestIndices[worsened], _, nearBranches = Branch.findClosest(points[worsened], branches, initialDistances=distances)
+            closestIndices[worsened], _, nearBranches = Branch.findClosest(points[worsened], 
+                                                                           branches, 
+                                                                           initialDistances=distances[worsened])
         else:
             closestIndices, _, nearBranches = Branch.findClosest(points, branches, initialDistances=distances)
 
@@ -216,11 +214,8 @@ class Branch:
             isRelevant = closestIndices == -1
             relevantPoints = points[isRelevant]
             for idx, branch in enumerate(closeBranches):
-                branch.tlsPoints = np.append(branch.tlsPoints, relevantPoints[closeIndices[isRelevant] == idx])
+                branch.tlsPoints = np.concatenate([branch.tlsPoints, relevantPoints[closeIndices[isRelevant] == idx]])
 
         for idx in nearBranches:
             branch: Branch = branches[idx]
-            branch.tlsPoints = np.append(branch.tlsPoints, points[closestIndices == idx])
-
-        removedPoints = points[closestIndices == -2]
-        return removedPoints
+            branch.tlsPoints = np.concatenate([branch.tlsPoints, points[closestIndices == idx]])
