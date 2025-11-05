@@ -4,6 +4,7 @@ from typing import List
 
 from src.adjustBifurcations import adjustBifurcations
 from src.filterBranches import filterBranches
+from src.smoothBranches import smoothBranches
 from src.objects.branch import Branch
 from src.utils.iteration import breadthFirstSearch
 from src.utils.parseMatlab import parse_struct, import_tree_model
@@ -21,7 +22,7 @@ def main():
 
     print("finished import")
 
-    adjustBifurcations(stem, treeModel, parameters)
+    adjustBifurcations(stem, parameters)
     
     print("finished adjusting bifurcations")
     treeModel = list(breadthFirstSearch(stem))
@@ -30,7 +31,9 @@ def main():
     prunedTlsPoints = filterBranches(stem, parameters)
 
     if prunedTlsPoints is not None:
-        unassignedTlsPoints = np.append(unassignedTlsPoints, prunedTlsPoints)
+        unassignedTlsPoints = np.append(unassignedTlsPoints, prunedTlsPoints, axis=0)
+
+    smoothBranches(stem, unassignedTlsPoints, parameters)
 
     print("finished")
 

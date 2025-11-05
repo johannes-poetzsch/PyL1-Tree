@@ -2,9 +2,10 @@ import cupy as cp
 import numpy as np
 import numpy.typing as npt
 
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 from .objects.branch import Branch
+from .utils.branchUtils import generateSearchRanges
 from .utils.geometry import angle, normalizeVectors, stripPointsDistances
 from .utils.iteration import breadthFirstSearch
 
@@ -20,7 +21,7 @@ def filterBranches(stem: Branch, parameters: dict) -> Optional[npt.NDArray[np.do
 
     branches = list(breadthFirstSearch(stem))
     for p, b in zip(unassignedTlsPoints, closeBranches):
-        Branch.reassignPoints(p, branches, b)
+        prunedTlsPoints.append(Branch.reassignPoints(p, branches, b))
 
     for branch in branches:
         if branch.isRemoved:
@@ -29,7 +30,7 @@ def filterBranches(stem: Branch, parameters: dict) -> Optional[npt.NDArray[np.do
     if len(prunedTlsPoints) == 0:
         return None
     else:
-        return np.concatenate(prunedTlsPoints)
+        return np.concatenate(prunedTlsPoints, axis=0)
 
 
 def filterByLength(stem: Branch,
@@ -96,32 +97,10 @@ def filterByInfluence(stem: Branch) -> Tuple[List[npt.NDArray[np.double]], List[
             if leaf.isRemoved or branch.branchBoundingBoxDistance(leaf) >= searchRange:
                 continue
 
-            distances = stripPointsDistances(branch.skeletonPoints, leaf.skeletonPoints, trimStart=True, trimEnd=True)
+            distances = branch.getDistances(leaf.skeletonPoints, trimStart=True, trimEnd=True, returnTrimming=False)
 
             if len(distances) > len(leaf.skeletonPoints) / 2 and distances.max() < searchRange:
                 closeBranches.append([branch, leaf.parent])
                 unassignedTlsPoints.append(leaf.remove())
     
     return unassignedTlsPoints, closeBranches
-
-
-def generateSearchRanges(branch: Branch,
-                         searchRanges: Dict[Branch, np.double],
-                         minAncestorSearchRange: Optional[np.double] = None):
-    if branch.isRemoved:
-        return
-
-    xp = cp.get_array_module(branch.tlsPoints)
-    if minAncestorSearchRange is None: # stem
-        distances: npt.NDArray = stripPointsDistances(xp.asarray(branch.skeletonPoints), branch.tlsPoints, trimStart=True)
-        searchRange = 2 * xp.median(distances)
-        searchRanges[branch] = searchRange
-        for child in branch.children:
-            generateSearchRanges(child, searchRanges, searchRange)
-    else: # not the stem
-        distances = npt.NDArray = stripPointsDistances(xp.asarray(branch.skeletonPoints), branch.tlsPoints, trimEnd=branch.isLeaf())
-        searchRange = 2 * xp.quantile(distances, 0.9, method="midpoint") # TODO: check alternatives
-        searchRange = xp.minimum(searchRange, minAncestorSearchRange)
-        searchRanges[branch] = searchRange
-        for child in branch.children:
-            generateSearchRanges(child, searchRanges, searchRange if branch.length > 0.2 else minAncestorSearchRange) # TODO: check magic number

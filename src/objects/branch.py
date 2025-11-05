@@ -4,7 +4,7 @@ import numpy as np
 import numpy.typing as npt
 from typing import List, Optional, Tuple
 
-from ..utils.geometry import linesPointsDistances
+from ..utils.geometry import angle, getStripAngles, linesPointsDistances, normalizeVectors, stripPointsDistances
 
 
 class Branch:
@@ -18,7 +18,7 @@ class Branch:
                  onGPU: bool = False):
         self.id = id
         self.isFlipped = False
-        self.skeletonIDs = skeletonIDs
+        self.skeletonIDs = skeletonIDs # TODO: can probably be removed
         self.skeletonPoints = skeletonPoints
         self.tlsPoints = tlsPoints
         self.cenOrder = cenOrder
@@ -58,14 +58,19 @@ class Branch:
 
         interpolation = np.concat([
             np.linspace(self.skeletonPoints[i], self.skeletonPoints[i+1], sampleCounts[i], endpoint=False) for i in range(len(sampleCounts) - 1)]
-            + [self.skeletonPoints[-1].reshape(1,3)])
+            + [self.skeletonPoints[-1].reshape(1,3)], 
+            axis=0)
         return interpolation, indices
     
 
-    def getDistances(self, points: npt.NDArray[np.double]) -> Tuple[npt.NDArray[np.double], npt.NDArray[np.double]]:
-        xp = cp.get_array_module(points)
-        segmentDistances = self.getSegmentDistances(points)
-        return segmentDistances.min(axis=0)
+    def getDistances(self, 
+                     points: npt.NDArray[np.double],
+                     trimStart = False,
+                     trimEnd = False,
+                     returnTrimming = False
+                     ) -> (npt.NDArray[np.double] |
+                           Tuple[npt.NDArray[np.double], npt.NDArray[np.bool]]):
+        return stripPointsDistances(self.skeletonPoints, points, trimStart, trimEnd, returnTrimming)
 
 
     def getSegmentDistances(self, points: npt.NDArray[np.double]) -> npt.NDArray[np.double]:
@@ -85,6 +90,10 @@ class Branch:
             restBranchDistances = xp.full(segmentDistances.shape[1], xp.inf, dtype=xp.double)
 
         return firstSegmentDistances, restBranchDistances
+    
+
+    def getAngles(self) -> Optional[npt.NDArray[np.double]]:
+        return getStripAngles(self.skeletonPoints)
     
 
     def updateSkeletonMeasurements(self):
@@ -111,8 +120,8 @@ class Branch:
         child = list(self.children)[0]
         if self.isFlipped or child.isFlipped:
             raise ValueError("Ensure branches are not flipped before expanding!")
-        self.skeletonIDs = np.concatenate((self.skeletonIDs, child.skeletonIDs))
-        self.skeletonPoints = np.concatenate((self.skeletonPoints, child.skeletonPoints))
+        self.skeletonIDs = np.append(self.skeletonIDs, child.skeletonIDs, axis=0)
+        self.skeletonPoints = np.append(self.skeletonPoints, child.skeletonPoints, axis=0)
         xp = cp.get_array_module(self.tlsPoints, child.tlsPoints)
         self.tlsPoints = xp.concatenate((self.tlsPoints, child.tlsPoints))
         self.updateSkeletonMeasurements()
@@ -121,6 +130,10 @@ class Branch:
 
     def isLeaf(self):
         return len(self.children) == 0
+    
+
+    def isStem(self):
+        return self.parent is None
 
 
     def setParent(self, parent: Branch):
@@ -151,7 +164,8 @@ class Branch:
     @staticmethod
     def findClosest(points: npt.NDArray[np.double],
                     branches: List[Branch], 
-                    initialDistances: Optional[npt.NDArray[np.double]] = None):
+                    initialDistances: Optional[npt.NDArray[np.double]] = None,
+                    useTrimming = False):
         xp = cp.get_array_module(points)
         pointsMin = points.min(axis=0)
         pointsMax = points.max(axis=0)
@@ -169,14 +183,23 @@ class Branch:
             if branch.getBoundingBoxDistance(pointsMin, pointsMax) >= maxDistance:
                 continue
 
-            dist = branch.getDistances(points)
+            if useTrimming:
+                dist, trimmed = branch.getDistances(points, trimStart=branch.isStem(), trimEnd=branch.isLeaf(), returnTrimming=True)
+            else:
+                dist = branch.getDistances(points)
             improved = dist < distances
 
             if xp.count_nonzero(improved) > 0:
-                closeIndices.append(idx)
-                closest[improved] = idx
                 distances[improved] = dist[improved]
                 maxDistance = distances.max()
+
+                if branch.isRemoved:
+                    closest[improved] = -2
+                else:
+                    closest[improved] = idx
+                    closeIndices.append(idx)
+                    if useTrimming:
+                        closest[improved & trimmed] = -2
 
         if xp is cp:
             closest, distances, closeIndices = cp.asnumpy(closest), cp.asnumpy(distances), cp.asnumpy(closeIndices)
@@ -188,7 +211,8 @@ class Branch:
     def reassignPoints(points: npt.NDArray[np.double],
                        branches: List[Branch],
                        closeBranches: Optional[List[Branch]] = None,
-                       originalDistances: Optional[npt.NDArray[np.double]] = None):
+                       originalDistances: Optional[npt.NDArray[np.double]] = None,
+                       useTrimming = False) -> npt.NDArray[np.double]:
         if closeBranches is None and originalDistances is not None:
             raise ValueError("Close branches have to be provided to allow pruning using original distances.")
         xp = cp.get_array_module(points)
@@ -196,16 +220,18 @@ class Branch:
         distances = None
         if closeBranches is not None:
             branches = [b for b in branches if b not in closeBranches]
-            closeIndices, distances, _ = Branch.findClosest(points, closeBranches)
+            closeIndices, distances, _ = Branch.findClosest(points, closeBranches, useTrimming=useTrimming)
 
         if originalDistances is not None:
             worsened = xp.asarray(distances > originalDistances)
             closestIndices = xp.full(len(points), -1, dtype=int)
-            closestIndices[worsened], _, nearBranches = Branch.findClosest(points[worsened], 
-                                                                           branches, 
-                                                                           initialDistances=distances[worsened])
+            closestIndices[worsened], _, nearBranches = Branch.findClosest(points[worsened], branches, 
+                                                                           initialDistances=distances[worsened],
+                                                                           useTrimming=useTrimming)
         else:
-            closestIndices, _, nearBranches = Branch.findClosest(points, branches, initialDistances=distances)
+            closestIndices, _, nearBranches = Branch.findClosest(points, branches, 
+                                                                 initialDistances=distances,
+                                                                 useTrimming=useTrimming)
 
         if cp.get_array_module(points) is cp:
             points = cp.asnumpy(points)
@@ -214,8 +240,11 @@ class Branch:
             isRelevant = closestIndices == -1
             relevantPoints = points[isRelevant]
             for idx, branch in enumerate(closeBranches):
-                branch.tlsPoints = np.concatenate([branch.tlsPoints, relevantPoints[closeIndices[isRelevant] == idx]])
+                branch.tlsPoints = np.append(branch.tlsPoints, relevantPoints[closeIndices[isRelevant] == idx], axis=0)
 
         for idx in nearBranches:
             branch: Branch = branches[idx]
-            branch.tlsPoints = np.concatenate([branch.tlsPoints, points[closestIndices == idx]])
+            branch.tlsPoints = np.append(branch.tlsPoints, points[closestIndices == idx], axis=0)
+
+        prunedPoints = points[closestIndices == -2]
+        return prunedPoints

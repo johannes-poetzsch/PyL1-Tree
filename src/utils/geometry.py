@@ -2,6 +2,8 @@ import cupy as cp
 import numpy as np
 import numpy.typing as npt
 
+from typing import Optional, Tuple
+
 
 def normalizeVectors(vectors: npt.NDArray):
     xp = cp.get_array_module(vectors)
@@ -29,8 +31,11 @@ def linesPointsDistances(lineStartPoints: npt.NDArray, # (L,D)
 def stripPointsDistances(strip: npt.NDArray, # (L+1,D)
                          points: npt.NDArray, # (N,D)
                          trimStart = False,
-                         trimEnd = False) -> npt.NDArray[np.double]:
-    xp = cp.get_array_module(strip, points, points)
+                         trimEnd = False,
+                         returnTrimming = False
+                         ) -> (npt.NDArray[np.double] | 
+                               Tuple[npt.NDArray[np.double], npt.NDArray[np.bool]]):
+    xp = cp.get_array_module(strip, points)
     segmentStarts = strip[:-1]
     segmentEnds = strip[1:]
 
@@ -43,10 +48,13 @@ def stripPointsDistances(strip: npt.NDArray, # (L+1,D)
     closestSegmentPoints = segmentStarts[:,xp.newaxis] - tMatrix[:,:,xp.newaxis] * segmentVectors[:,xp.newaxis] # (L,N,D)
 
     segmentDistances: npt.NDArray = xp.linalg.norm(closestSegmentPoints - points, axis=-1) # (L,N)
-    distances = segmentDistances.min(axis=0)
+    distances: npt.NDArray[np.double] = segmentDistances.min(axis=0)
 
     if not (trimStart or trimEnd):
-        return distances
+        if returnTrimming:
+            return distances, xp.zeros(distances.shape, dtype=bool)
+        else:
+            return distances
     else:
         closestSegment = segmentDistances.argmin(axis=0) # (N)
 
@@ -60,7 +68,19 @@ def stripPointsDistances(strip: npt.NDArray, # (L+1,D)
         else:
             trimmed = (closestSegment == endIdx) & (tMatrix[endIdx] == 1)
 
-        return distances[xp.logical_not(trimmed)]
+        if returnTrimming:
+            return distances, trimmed
+        else:
+            return distances[xp.logical_not(trimmed)]
+        
+
+def getStripAngles(strip: npt.NDArray[np.double]) -> Optional[npt.NDArray[np.double]]:
+    if len(strip) < 3:
+        return None
+    directions = strip[1:] - strip[:-1]
+    normalizeVectors(directions)
+    angles = angle(directions[:-1], directions[1:])
+    return angles
 
 
 def angle(directions_a: npt.NDArray,

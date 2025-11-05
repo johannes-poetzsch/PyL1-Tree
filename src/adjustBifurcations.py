@@ -14,7 +14,7 @@ from .utils.iteration import breadthFirstSearch
 #from src.utils.kernels import cum_min
 
 
-def adjustBifurcations(stem, treeModel, parameters):
+def adjustBifurcations(stem, parameters):
     xp = np
 
     for parent in breadthFirstSearch(stem, returnLeaves=False):
@@ -167,8 +167,10 @@ def applyAdjustment(stem: Branch,
         if len(parentBranch.children) == 1:
             parentBranch.expand()
 
-    Branch.reassignPoints(tlsPoints, branches=list(breadthFirstSearch(stem)),
-                          closeBranches=associatedBranches, originalDistances=originalDistances)
+    prunedPoints = Branch.reassignPoints(tlsPoints, branches=list(breadthFirstSearch(stem)),
+                                         closeBranches=associatedBranches, originalDistances=originalDistances)
+    
+    assert(len(prunedPoints) == 0)
 
     return newParent
 
