@@ -60,15 +60,13 @@ def pruneByAngle(stem: Branch,
         if branch.isRemoved:
             continue
 
-        parentDirections = branch.skeletonPoints[1:] - branch.skeletonPoints[:-1]
-        normalizeVectors(parentDirections)
+        parentDirections = normalizeVectors(branch.skeletonPoints[1:] - branch.skeletonPoints[:-1])
 
         for child in branch.children:
             if child.isRemoved:
                 continue
 
-            childDirection = child.skeletonPoints[-1] - child.skeletonPoints[0]
-            normalizeVectors(childDirection)
+            childDirection = normalizeVectors(child.skeletonPoints[-1] - child.skeletonPoints[0])
             _angle = np.median(angle(parentDirections, childDirection))
 
             if _angle > maxAngleThreshold:
@@ -81,7 +79,7 @@ def filterByInfluence(stem: Branch) -> Tuple[List[npt.NDArray[np.double]], List[
     closeBranches: List[List[Branch]] = []
 
     searchRanges = {}
-    generateSearchRanges(stem, searchRanges)
+    generateSearchRanges(stem, searchRanges, useMedianForStem=True) # TODO: check why searchRanges are different
     branches = [b for b in breadthFirstSearch(stem) if not b.isRemoved]
     leaves = [b for b in branches if b.isLeaf()]
 
@@ -94,7 +92,7 @@ def filterByInfluence(stem: Branch) -> Tuple[List[npt.NDArray[np.double]], List[
         searchRange = searchRanges[branch]
 
         for leaf in leaves:
-            if leaf.isRemoved or branch.branchBoundingBoxDistance(leaf) >= searchRange:
+            if leaf is branch or leaf.isRemoved or branch.branchBoundingBoxDistance(leaf) >= searchRange:
                 continue
 
             distances = branch.getDistances(leaf.skeletonPoints, trimStart=True, trimEnd=True, returnTrimming=False)

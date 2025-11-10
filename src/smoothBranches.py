@@ -13,7 +13,7 @@ from .utils.iteration import breadthFirstSearch
 
 def smoothBranches(stem: Branch, 
                    unassignedTlsPoints: npt.NDArray[np.double],
-                   parameters: Dict[str, any]):
+                   parameters: Dict[str, any]) -> npt.NDArray[np.double]:
     branches = list(breadthFirstSearch(stem))
 
     removeBranchAnomalies(stem)
@@ -32,6 +32,8 @@ def smoothBranches(stem: Branch,
         densities = computeDensity(branch.tlsPoints, tlsKDTree, allTlsPoints, 2 * parameters["initialSearchRange"])
         smoothBranch(branch, densities, parameters["resolution"], np.deg2rad(parameters["smoothAngleThreshold"]))
 
+    return unassignedTlsPoints
+
 
 def removeBranchAnomalies(stem):
     rightAngle = np.deg2rad(90)
@@ -41,7 +43,12 @@ def removeBranchAnomalies(stem):
             angles = branch.getAngles()
             if angles is None or len(angles) <= 1:
                 break
-            maxIdx = angles[:-1].argmax()
+
+            if branch.isLeaf():
+                maxIdx = angles.argmax()
+            else:
+                maxIdx = angles[:-1].argmax() # Avoid removing the terminal point of an inner node if possible
+
             maxAngle = angles[maxIdx]
             if maxAngle >= rightAngle:
                 deletionIdx = maxIdx + 2
@@ -51,7 +58,7 @@ def removeBranchAnomalies(stem):
                 wasChanged = True
             else:
                 break
-        if angles is not None and angles[-1] > rightAngle:
+        if angles is not None and angles[-1] > rightAngle and not branch.isLeaf():
             raise ValueError("Did not expect a terminal point to be anomalous.")
         if wasChanged:
             branch.updateSkeletonMeasurements()
@@ -126,8 +133,7 @@ def smoothBranch(branch: Branch,
     startPoint: npt.NDArray[np.double] = branch.skeletonPoints[0]
     endPoint: npt.NDArray[np.double] = branch.skeletonPoints[-1]
 
-    direction = endPoint - startPoint
-    normalizeVectors(direction)
+    direction = normalizeVectors(endPoint - startPoint)
 
     distanceToStart: npt.NDArray[np.double] = np.vecdot(tlsPoints - startPoint, direction)
     order = distanceToStart.argsort() # TODO: does actually ordering improve caching?

@@ -1,7 +1,7 @@
 import cupy as cp
 import numpy as np
 import numpy.typing as npt
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from ..objects.branch import Branch
 
@@ -10,7 +10,7 @@ def generateSearchRanges(branch: Branch,
                          searchRanges: Dict[Branch, np.double],
                          minAncestorSearchRange: Optional[np.double] = np.inf,
                          useTrimming = True,
-                         useMedianForStem = True):
+                         useMedianForStem = False):
     if branch.isRemoved:
         return
 

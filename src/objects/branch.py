@@ -4,7 +4,7 @@ import numpy as np
 import numpy.typing as npt
 from typing import List, Optional, Tuple
 
-from ..utils.geometry import angle, getStripAngles, linesPointsDistances, normalizeVectors, stripPointsDistances
+from ..utils.geometry import getStripAngles, linesPointsDistances, stripPointsDistances
 
 
 class Branch:
@@ -117,15 +117,14 @@ class Branch:
     def expand(self):
         if len(self.children) != 1:
             raise ValueError("Only branches with a single child branch can be expanded")
-        child = list(self.children)[0]
+        child = self.children.pop()
         if self.isFlipped or child.isFlipped:
             raise ValueError("Ensure branches are not flipped before expanding!")
-        self.skeletonIDs = np.append(self.skeletonIDs, child.skeletonIDs, axis=0)
-        self.skeletonPoints = np.append(self.skeletonPoints, child.skeletonPoints, axis=0)
+        self.skeletonIDs = np.append(self.skeletonIDs, child.skeletonIDs[1:], axis=0)
+        self.skeletonPoints = np.append(self.skeletonPoints, child.skeletonPoints[1:], axis=0)
         xp = cp.get_array_module(self.tlsPoints, child.tlsPoints)
-        self.tlsPoints = xp.concatenate((self.tlsPoints, child.tlsPoints))
+        self.tlsPoints = xp.append(self.tlsPoints, child.tlsPoints, axis=0)
         self.updateSkeletonMeasurements()
-        child.remove()
 
 
     def isLeaf(self):
@@ -162,10 +161,10 @@ class Branch:
 
 
     @staticmethod
-    def findClosest(points: npt.NDArray[np.double],
-                    branches: List[Branch], 
-                    initialDistances: Optional[npt.NDArray[np.double]] = None,
-                    useTrimming = False):
+    def findClosestBranch(points: npt.NDArray[np.double],
+                          branches: List[Branch], 
+                          initialDistances: Optional[npt.NDArray[np.double]] = None,
+                          useTrimming = False):
         xp = cp.get_array_module(points)
         pointsMin = points.min(axis=0)
         pointsMax = points.max(axis=0)
@@ -220,16 +219,16 @@ class Branch:
         distances = None
         if closeBranches is not None:
             branches = [b for b in branches if b not in closeBranches]
-            closeIndices, distances, _ = Branch.findClosest(points, closeBranches, useTrimming=useTrimming)
+            closeIndices, distances, _ = Branch.findClosestBranch(points, closeBranches, useTrimming=useTrimming)
 
         if originalDistances is not None:
             worsened = xp.asarray(distances > originalDistances)
             closestIndices = xp.full(len(points), -1, dtype=int)
-            closestIndices[worsened], _, nearBranches = Branch.findClosest(points[worsened], branches, 
+            closestIndices[worsened], _, nearBranches = Branch.findClosestBranch(points[worsened], branches, 
                                                                            initialDistances=distances[worsened],
                                                                            useTrimming=useTrimming)
         else:
-            closestIndices, _, nearBranches = Branch.findClosest(points, branches, 
+            closestIndices, _, nearBranches = Branch.findClosestBranch(points, branches, 
                                                                  initialDistances=distances,
                                                                  useTrimming=useTrimming)
 

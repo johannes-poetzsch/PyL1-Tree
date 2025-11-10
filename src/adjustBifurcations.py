@@ -191,10 +191,9 @@ def isBifurcationCredible(targetPoints: npt.NDArray[np.double],
     nextPoints = np.roll(targetPoints, -1, axis=0)
 
     if targetBranch is parentBranch:
-        parentDirection = targetPoints - nextPoints
+        parentDirection = normalizeVectors(targetPoints - nextPoints)
     else:
-        parentDirection = targetPoints - parentBranch.skeletonPoints[1]
-    normalizeVectors(parentDirection)
+        parentDirection = normalizeVectors(targetPoints - parentBranch.skeletonPoints[1])
 
     anglesAtBifurcationCredible = []
     anglesAfterBifurcationCredible = []
@@ -207,17 +206,16 @@ def isBifurcationCredible(targetPoints: npt.NDArray[np.double],
         if childBranch is targetBranch:
             nextNextPoints = np.roll(nextPoints, -1, axis=0)            
             
-            childDirectionAtBifurcation = nextPoints - targetPoints
-            childDirectionAfterBifurcation = nextNextPoints - nextPoints
+            childDirectionAtBifurcation = normalizeVectors(nextPoints - targetPoints)
+            childDirectionAfterBifurcation = normalizeVectors(nextNextPoints - nextPoints)
         else:
-            childDirectionAtBifurcation = childBranch.skeletonPoints[1] - targetPoints
+            childDirectionAtBifurcation = normalizeVectors(childBranch.skeletonPoints[1] - targetPoints)
 
         if len(childBranch.skeletonPoints) > 2:
-            childDirectionAfterBifurcation = childBranch.skeletonPoints[2] - childBranch.skeletonPoints[1]
+            childDirectionAfterBifurcation = normalizeVectors(childBranch.skeletonPoints[2] - childBranch.skeletonPoints[1])
         else:
             childDirectionAfterBifurcation = None
-        
-        normalizeVectors(childDirectionAtBifurcation)
+
         childBranchDirections.append(childDirectionAtBifurcation)
         angleAtBifurcation = angle(parentDirection, childDirectionAtBifurcation)
 
@@ -226,7 +224,6 @@ def isBifurcationCredible(targetPoints: npt.NDArray[np.double],
         anglesAtBifurcationCredible.append(isAngleAtBifurcationCredible)
 
         if childDirectionAfterBifurcation is not None:
-            normalizeVectors(childDirectionAfterBifurcation)
             angleAfterBifurcation = angle(childDirectionAtBifurcation, childDirectionAfterBifurcation)
 
             isAngleAfterBifurcationCredible = angleAfterBifurcation <= maxAngleThreshold
