@@ -12,8 +12,8 @@ class Branch:
                  id: int,
                  skeletonIDs: npt.NDArray[np.intp],
                  skeletonPoints: npt.NDArray[np.double],
-                 tlsPoints: npt.NDArray[np.double],
-                 cenOrder: int,
+                 tlsPoints: npt.NDArray[np.double] = np.empty([0,3], dtype=np.double),
+                 cenOrder: int = None,
                  parent: Branch = None,
                  onGPU: bool = False):
         self.id = id
@@ -45,19 +45,40 @@ class Branch:
             self.skeletonPoints = np.flipud(self.skeletonPoints)
         elif not self.skeletonIDs[0] == bifurcationID:
             raise ValueError("Bifurcation can only occur at terminal branch points")
+        
+
+    # returns branch that ends at splitIdx.
+    def split(self, splitIdx: int) -> Branch:
+        if splitIdx <= 0:
+            return self.parent
+        if splitIdx >= len(self.skeletonPoints) - 1:
+            return self
+
+        splitEnd = Branch(self.id, self.skeletonIDs[splitIdx:], self.skeletonPoints[splitIdx:])
+
+        for child in list(self.children):
+            child.setParent(splitEnd)
+
+        splitEnd.setParent(self)
+        self.skeletonIDs = self.skeletonIDs[:splitIdx+1]
+        self.skeletonPoints = self.skeletonPoints[:splitIdx+1]
+        self.updateSkeletonMeasurements()
+
+        return self
 
 
     def getInterpolation(self, resolution: np.double) -> Tuple[npt.NDArray[np.double], npt.NDArray[np.intp]]:
 
-        segments = self.skeletonPoints - np.roll(self.skeletonPoints, -1, axis=0)
+        segments = self.skeletonPoints[1:] - self.skeletonPoints[:-1]
         segmentLengths = np.linalg.norm(segments, axis=1)
 
         sampleCounts = np.floor(segmentLengths / resolution).astype(np.intp) + 1
-        sampleCounts[-1] = 1
-        indices = np.repeat(np.arange(sampleCounts.size), sampleCounts)
+
+        indices = np.repeat(np.arange(len(sampleCounts)), sampleCounts)
+        indices = np.append(indices, len(self.skeletonPoints) - 1)
 
         interpolation = np.concat([
-            np.linspace(self.skeletonPoints[i], self.skeletonPoints[i+1], sampleCounts[i], endpoint=False) for i in range(len(sampleCounts) - 1)]
+            np.linspace(self.skeletonPoints[i], self.skeletonPoints[i+1], sampleCounts[i], endpoint=False) for i in range(len(sampleCounts))]
             + [self.skeletonPoints[-1].reshape(1,3)], 
             axis=0)
         return interpolation, indices

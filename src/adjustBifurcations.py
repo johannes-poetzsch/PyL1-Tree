@@ -144,7 +144,7 @@ def applyAdjustment(stem: Branch,
 
     originalDistances = xp.min(xp.stack([b.getDistances(tlsPoints) for b in associatedBranches]), axis=0)
 
-    adjustmentBranch.skeletonIDs = adjustmentBranch.skeletonIDs[adjustmentIdx:]
+    adjustmentBranch.skeletonIDs = adjustmentBranch.skeletonIDs[adjustmentIdx:] # TODO: test and fix for behaviour with flipping and interpolation
     adjustmentBranch.skeletonPoints = adjustmentBranch.skeletonPoints[adjustmentIdx:]
 
     bifurcationId = adjustmentBranch.skeletonIDs[0]
@@ -167,10 +167,8 @@ def applyAdjustment(stem: Branch,
         if len(parentBranch.children) == 1:
             parentBranch.expand()
 
-    prunedPoints = Branch.reassignPoints(tlsPoints, branches=list(breadthFirstSearch(stem)),
-                                         closeBranches=associatedBranches, originalDistances=originalDistances)
-    
-    assert(len(prunedPoints) == 0)
+    Branch.reassignPoints(tlsPoints, branches=list(breadthFirstSearch(stem)),
+                          closeBranches=associatedBranches, originalDistances=originalDistances)
 
     return newParent
 

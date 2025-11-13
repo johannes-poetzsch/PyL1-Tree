@@ -3,6 +3,7 @@ import numpy as np
 from typing import List
 
 from src.adjustBifurcations import adjustBifurcations
+from src.extendSkeleton import extendSkeleton
 from src.filterBranches import filterBranches
 from src.smoothBranches import smoothBranches
 from src.objects.branch import Branch
@@ -33,7 +34,8 @@ def main():
     if prunedTlsPoints is not None:
         unassignedTlsPoints = np.append(unassignedTlsPoints, prunedTlsPoints, axis=0)
 
-    smoothBranches(stem, unassignedTlsPoints, parameters)
+    unassignedTlsPoints = smoothBranches(stem, unassignedTlsPoints, parameters)
+    extendSkeleton(stem, unassignedTlsPoints, parameters)
 
     print("finished")
 
