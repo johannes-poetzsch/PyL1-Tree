@@ -96,5 +96,5 @@ def angle(directions_a: npt.NDArray,
         directions_a = normalizeVectors(directions_a)
         directions_b = normalizeVectors(directions_b)
     cos = np.vecdot(directions_a, directions_b)
-    np.clip(cos, -1, 1, out=cos)
+    cos = np.clip(cos, -1.0, 1.0)
     return np.arccos(cos)

@@ -199,29 +199,30 @@ def buildSkeletonGraph(skeletonPoints: npt.NDArray[np.double],
     kdTree = KDTree(skeletonPoints)
         
     neighbors = []
-    for point in skeletonPoints:
+    for pointIdx, point in enumerate(skeletonPoints):
         minNeighborDistance = kdTree.query(point, k=2)[0][1]
-        pointNeighbors = kdTree.query_ball_point(point, r=2*minNeighborDistance, return_sorted=True)
-        neighbors.append(pointNeighbors[1:])
+        pointNeighbors = kdTree.query_ball_point(point, r=2*minNeighborDistance)
+        neighbors.append(pointNeighbors)
 
-    graph = nx.DiGraph()
-    graph.add_nodes_from(range(len(skeletonPoints)))
+    skeletonGraph = nx.DiGraph()
+    skeletonGraph.add_nodes_from(range(len(skeletonPoints)))
 
     searchHooks = deque([(rootIdx, initialSearchDirection)])
     while searchHooks:
         pointIdx, searchDirection = searchHooks.popleft()
 
         for neighborIdx in neighbors[pointIdx]:
-            if (neighborIdx == rootIdx # root has no incoming edges
-                or graph.has_edge(pointIdx, neighborIdx)):
+            if (neighborIdx == pointIdx or 
+                    neighborIdx == rootIdx or # root has no incoming edges
+                    skeletonGraph.has_edge(pointIdx, neighborIdx)):
                 continue
 
             neighborDirection = normalizeVectors(skeletonPoints[neighborIdx] - skeletonPoints[pointIdx])
             neighborAngle = angle(searchDirection, neighborDirection)
 
             if neighborAngle <= maxAngleThreshold:
-                distance = np.linalg.norm(skeletonPoints[neighborIdx] - skeletonPoints[pointIdx])
-                graph.add_edge(pointIdx, neighborIdx, distance=distance)
+                distance = np.linalg.norm(skeletonPoints[neighborIdx] - skeletonPoints[pointIdx], axis=-1)
+                skeletonGraph.add_edge(pointIdx, neighborIdx, distance=distance)
                 searchHooks.append((neighborIdx, neighborDirection))
 
     if nx.is_weakly_connected(skeletonGraph):
@@ -229,7 +230,7 @@ def buildSkeletonGraph(skeletonPoints: npt.NDArray[np.double],
 
     skeletonGraph: nx.DiGraph = nx.minimum_spanning_arborescence(skeletonGraph, attr="distance")
 
-    return graph
+    return skeletonGraph
 
 
 def buildSubtreeFromGraph(skeletonGraph: nx.DiGraph,

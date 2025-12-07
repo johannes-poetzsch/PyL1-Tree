@@ -24,7 +24,7 @@ def generateSearchRanges(branch: Branch,
     if useMedianForStem and branch.isStem:
         searchRange = 2 * xp.median(distances)
     else:
-        searchRange = 2 * xp.quantile(distances, 0.9, method="midpoint") # TODO: check alternatives
+        searchRange = 2 * xp.quantile(distances, 0.9, method="hazen")
 
     searchRange = xp.minimum(searchRange, minAncestorSearchRange)
 

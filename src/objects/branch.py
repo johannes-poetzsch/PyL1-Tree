@@ -128,7 +128,7 @@ class Branch:
     def getBoundingBoxDistance(self, boundingBoxMin: np.double, boundingBoxMax: np.double):
         delta1 = np.clip(self.__boundingBoxMin - boundingBoxMax, a_min=0, a_max=None)
         delta2 = np.clip(boundingBoxMin - self.__boundingBoxMax, a_min=0, a_max=None)
-        return np.linalg.norm(delta1 + delta2)
+        return np.linalg.norm(delta1 + delta2, axis=-1)
     
 
     def branchBoundingBoxDistance(self, other: Branch):

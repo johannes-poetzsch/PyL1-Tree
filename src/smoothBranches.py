@@ -9,6 +9,7 @@ from .objects.branch import Branch
 from .utils.branchUtils import generateSearchRanges
 from .utils.geometry import getStripAngles, normalizeVectors, stripPointsDistances
 from .utils.iteration import breadthFirstSearch
+from .utils.pointMetrics import calculateDensity
 
 
 def smoothBranches(stem: Branch, 
@@ -29,7 +30,7 @@ def smoothBranches(stem: Branch,
 
     tlsKDTree = KDTree(allTlsPoints)
     for branch in branches:
-        densities = computeDensity(branch.tlsPoints, tlsKDTree, allTlsPoints, 2 * parameters["initialSearchRange"])
+        densities = calculateDensity(branch.tlsPoints, tlsKDTree, parameters["initialSearchRange"]) # TODO check this
         smoothBranch(branch, densities, parameters["resolution"], np.deg2rad(parameters["smoothAngleThreshold"]))
 
     return unassignedTlsPoints
@@ -90,28 +91,6 @@ def limitToRange(branches: List[Branch],
         branch.tlsPoints = branch.tlsPoints[~outOfRange]
 
     return np.concatenate(prunedTlsPoints, axis=0)
-
-
-def computeDensity(points: npt.NDArray[np.double], 
-                   kdTree: KDTree, 
-                   allPoints: npt.NDArray[np.double], 
-                   searchRange: float
-                   ) -> npt.NDArray[np.double]:
-    # TODO: compare to query_ball_tree, set workers
-    neighbors = kdTree.query_ball_point(points, searchRange)
-
-    densities = np.empty(shape=len(points), dtype=np.double)
-    rangeFactor = -1 / ((searchRange/2) ** 2)
-    for idx, neighborList in enumerate(neighbors):
-        if len(neighborList) == 1: # neighborhood only contains point itself
-            densities[idx] = 1
-        else:
-            distances: npt.NDArray = np.linalg.norm(allPoints[neighborList] - points[idx])
-            distances = distances[distances > 0]
-            weights: npt.NDArray = np.exp(np.square(distances) * rangeFactor)
-            densities[idx] = 1 / (1 + weights.sum())
-
-    return densities
 
 
 def smoothBranch(branch: Branch, 

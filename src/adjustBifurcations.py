@@ -247,7 +247,7 @@ def getLengthMetrics(targetPoints: npt.NDArray[np.double],
     newBifurcationLength = np.sum(np.stack([np.linalg.norm(targetPoints[1:][isCredible] - b.skeletonPoints[1], axis=1) for b in otherBranches]), axis=0)
 
     targetBifurcationSegmentLength = np.cumsum(np.linalg.norm(targetPoints - np.roll(targetPoints, -1, axis=0), axis=1))[:-1][isCredible]
-    otherBifurcationSegmentsLength = np.sum(np.stack([np.linalg.norm(b.skeletonPoints[0] - b.skeletonPoints[1]) for b in otherBranches]))
+    otherBifurcationSegmentsLength = np.sum(np.stack([np.linalg.norm(b.skeletonPoints[0] - b.skeletonPoints[1], axis=-1) for b in otherBranches]))
     removedSegmentsLength = targetBifurcationSegmentLength + otherBifurcationSegmentsLength
 
     return newBifurcationLength, removedSegmentsLength

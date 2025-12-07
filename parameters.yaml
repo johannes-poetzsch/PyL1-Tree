@@ -1,0 +1,28 @@
+parameters:
+  leafOn: False
+  woodProp: 0.03
+  basePoint: null
+  baseRadius: null
+  initialSearchRange: null
+  searchRange: null
+  minMu: 0.15
+  maxMu: 0.35
+  maxIterationNumFixedRange: 20
+  iterationSpeed: 0.4
+  nearThreshold: 0.01
+  sigmaThreshold: 0.9
+  kSmoothSigma: 6
+  sigmaTracingThreshold: 0.8
+  distanceTracingThreshold: 0.4
+  angleTracingThreshold: 25
+  kTracingThreshold: 12
+  branchSizeThreshold: 3
+  minDistanceThreshold: 0.1
+  maxDistanceThreshold: 0.8
+  minAngleThreshold: 10
+  maxAngleThreshold: 120
+  densityFactor: 0.33333 # 1/3
+  resolution: 0.03
+  windowSize: 0.1
+  moveStep: 0.01
+  smoothAngleThreshold: 45
