@@ -29,8 +29,8 @@ def generateSeeds(tlsPoints: npt.NDArray[np.double], # must be sorted by height 
     return seedPoints, seedRelPathPositions
 
 
-def findBase(tlsPoints: npt.NDArray[np.double]) -> Tuple[npt.NDArray[np.double], np.double]: 
-    bottomPoints = tlsPoints[:len(tlsPoints)//100]
+def findBase(tlsPoints: npt.NDArray[np.double]) -> Tuple[npt.NDArray[np.double], np.double]:
+    bottomPoints = tlsPoints[:len(tlsPoints)//100] # points are sorted by height
     mins = np.quantile(bottomPoints, 0.05, axis=0, method="hazen")
     maxs = np.quantile(bottomPoints, 0.95, axis=0, method="hazen")
 

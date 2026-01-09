@@ -72,10 +72,9 @@ def reassignAllPoints(stem: Branch, unassignedTlsPoints: npt.NDArray[np.double])
     for branch in branches:
         tlsPoints = branch.tlsPoints
         branch.tlsPoints = np.empty([0,3], dtype=np.double)
-        prunedTlsPoints.append(Branch.reassignPoints(tlsPoints, branches, closeBranches=[branch], useTrimming=True))
+        prunedTlsPoints.append(Branch.assignPoints(tlsPoints, branches, closeBranches=[branch], useTrimming=True))
 
-    # TODO: optimize performance by splitting points into local chunks
-    prunedTlsPoints.append(Branch.reassignPoints(unassignedTlsPoints, branches, useTrimming=True))
+    prunedTlsPoints.append(Branch.assignAllPoints(unassignedTlsPoints, branches, useTrimming=True))
 
     return np.concatenate(prunedTlsPoints, axis=0)
 

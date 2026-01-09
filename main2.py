@@ -12,10 +12,12 @@ def main():
         parameters = yaml.safe_load(config)["parameters"]
 
     tlsPoints = np.unique(tlsPoints, axis=0)
-    heightAttributeIdx = 2
-    tlsPoints = tlsPoints[np.argsort(tlsPoints[:,heightAttributeIdx])] # sort by height
+    parameters["heightAttributeIdx"] = 2 # TODO: ensure height attribute is Z, reorder otherwise
+    tlsPoints = tlsPoints[np.argsort(tlsPoints[:, parameters["heightAttributeIdx"]])]
     seedPoints, relPathPositions = generateSeeds(tlsPoints, parameters)
     branches = generateSkeleton(tlsPoints, seedPoints, relPathPositions, parameters)
+
+    return
     
 
 

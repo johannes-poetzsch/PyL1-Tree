@@ -162,13 +162,10 @@ def applyAdjustment(stem: Branch,
         newParent = adjustmentBranch.parent
         # branch can be removed
         del(associatedBranches[associatedBranches.index(adjustmentBranch)])
-        adjustmentBranch.remove(adjustChildSkeletons=False)
-        
-        if len(parentBranch.children) == 1:
-            parentBranch.expand()
+        adjustmentBranch.remove()
 
-    Branch.reassignPoints(tlsPoints, branches=list(breadthFirstSearch(stem)),
-                          closeBranches=associatedBranches, originalDistances=originalDistances)
+    Branch.assignPoints(tlsPoints, otherBranches=list(breadthFirstSearch(stem)),
+                        closeBranches=associatedBranches, originalDistances=originalDistances)
 
     return newParent
 

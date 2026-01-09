@@ -18,7 +18,8 @@ def normalizeVectors(vectors: npt.NDArray):
 
 def linesPointsDistances(lineStartPoints: npt.NDArray, # (L,D)
                          lineEndPoints: npt.NDArray, # (L,D) or (D)
-                         points: npt.NDArray) -> npt.NDArray: # (N,D)
+                         points: npt.NDArray, # (N,D)
+                         returnPedalPoints: bool = False) -> npt.NDArray | Tuple[npt.NDArray, npt.NDArray]:
     xp = cp.get_array_module(lineStartPoints, lineEndPoints, points)
     lineVectors = lineStartPoints - lineEndPoints # (L,D)
 
@@ -31,7 +32,10 @@ def linesPointsDistances(lineStartPoints: npt.NDArray, # (L,D)
     del tMatrix
     distances = xp.linalg.norm(closestPointsOnLines - points, axis=-1) # (L,N)
 
-    return distances
+    if returnPedalPoints:
+        return distances, closestPointsOnLines
+    else:
+        return distances
 
 
 def stripPointsDistances(strip: npt.NDArray, # (L+1,D)
@@ -39,8 +43,7 @@ def stripPointsDistances(strip: npt.NDArray, # (L+1,D)
                          trimStart = False,
                          trimEnd = False,
                          returnTrimming = False
-                         ) -> (npt.NDArray[np.double] | 
-                               Tuple[npt.NDArray[np.double], npt.NDArray[np.bool]]):
+                         ) -> (npt.NDArray[np.double] | Tuple[npt.NDArray[np.double], npt.NDArray[np.bool]]):
     xp = cp.get_array_module(strip, points)
     segmentStarts = strip[:-1]
     segmentEnds = strip[1:]
@@ -56,28 +59,19 @@ def stripPointsDistances(strip: npt.NDArray, # (L+1,D)
     segmentDistances: npt.NDArray = xp.linalg.norm(closestSegmentPoints - points, axis=-1) # (L,N)
     distances: npt.NDArray[np.double] = segmentDistances.min(axis=0)
 
-    if not (trimStart or trimEnd):
-        if returnTrimming:
-            return distances, xp.zeros(distances.shape, dtype=bool)
-        else:
-            return distances
-    else:
-        closestSegment = segmentDistances.argmin(axis=0) # (N)
+    trimmed = np.zeros_like(distances, dtype=bool)
+    closestSegment = segmentDistances.argmin(axis=0) # (N)
 
+    if trimStart:
+        trimmed |= (closestSegment == 0) & (tMatrix[0] == 0)
+    if trimEnd:
         endIdx = len(segmentVectors) - 1
+        trimmed |= (closestSegment == endIdx) & (tMatrix[endIdx] == 1)
 
-        if trimStart and trimEnd:
-            trimmed = xp.logical_or((closestSegment == 0) & (tMatrix[0] == 0),
-                                    (closestSegment == endIdx) & (tMatrix[endIdx] == 1))
-        elif trimStart:
-            trimmed = (closestSegment == 0) & (tMatrix[0] == 0)
-        else:
-            trimmed = (closestSegment == endIdx) & (tMatrix[endIdx] == 1)
-
-        if returnTrimming:
-            return distances, trimmed
-        else:
-            return distances[xp.logical_not(trimmed)]
+    if returnTrimming:
+        return distances, trimmed
+    else:
+        return distances[xp.logical_not(trimmed)]
         
 
 def getStripAngles(strip: npt.NDArray[np.double]) -> Optional[npt.NDArray[np.double]]:

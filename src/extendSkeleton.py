@@ -5,10 +5,10 @@ import numpy as np
 import numpy.typing as npt
 from scipy.spatial import KDTree
 from sklearn.cluster import dbscan, k_means
-from sklearn.neighbors import NearestNeighbors
 from typing import Dict, List, Optional
 
 from .objects.branch import Branch
+from .utils.branchUtils import buildSubtreeFromGraph
 from .utils.geometry import angle, normalizeVectors
 from .utils.iteration import breadthFirstSearch
 
@@ -46,18 +46,18 @@ def extendSkeleton(stem: Branch,
     branches = list(breadthFirstSearch(stem)) # TODO: make this an extra method?
 
     for cluster, root in zip(clusters, newSubtreeRoots):
-        prunedTlsPoints.append(Branch.reassignPoints(unassignedTlsPoints[cluster],
-                                                     branches,
-                                                     closeBranches=list(breadthFirstSearch(root)),
-                                                     useTrimming=True))
+        prunedTlsPoints.append(Branch.assignPoints(unassignedTlsPoints[cluster],
+                                                   branches,
+                                                   closeBranches=list(breadthFirstSearch(root)),
+                                                   useTrimming=True))
 
     for branch in branches:
         tlsPoints = branch.tlsPoints
         branch.tlsPoints = np.empty([0,3], dtype=np.double)
-        prunedTlsPoints.append(Branch.reassignPoints(tlsPoints, 
-                                                     branches, 
-                                                     closeBranches=[branch], 
-                                                     useTrimming=True))
+        prunedTlsPoints.append(Branch.assignPoints(tlsPoints,
+                                                   branches,
+                                                   closeBranches=[branch],
+                                                   useTrimming=True))
 
     return prunedTlsPoints
 
@@ -231,31 +231,6 @@ def buildSkeletonGraph(skeletonPoints: npt.NDArray[np.double],
     skeletonGraph: nx.DiGraph = nx.minimum_spanning_arborescence(skeletonGraph, attr="distance")
 
     return skeletonGraph
-
-
-def buildSubtreeFromGraph(skeletonGraph: nx.DiGraph,
-                          skeletonPoints: npt.NDArray[np.double],
-                          rootIdx: int,
-                          nextIdx: int,
-                          parent: Branch = None):
-    pointIndices = [rootIdx, nextIdx]
-
-    while True:
-        successors = list(skeletonGraph.successors(pointIndices[-1]))
-        if len(successors) == 1:
-            pointIndices.append(successors[0])
-        else:
-            break
-    
-    branch = Branch(id=-1,
-                    skeletonIDs=np.arange(len(pointIndices)),
-                    skeletonPoints=skeletonPoints[pointIndices],
-                    parent=parent)
-    
-    for s in successors:
-        buildSubtreeFromGraph(skeletonGraph, skeletonPoints, pointIndices[-1], s, branch)
-
-    return branch
 
 
 def skeletonIsValid(firstBranches: List[Branch],
