@@ -27,7 +27,7 @@ def filterBranches(stem: Branch, parameters: dict) -> Optional[npt.NDArray[np.do
 
     branches = list(breadthFirstSearch(stem)) + prunedBranches
     for rb, cb in zip(removedBranches, closeBranches):
-        prunedTlsPoints.append(Branch.assignPoints(rb.tlsPoints, branches, cb))
+        prunedTlsPoints.append(Branch.assignLocalPoints(rb.tlsPoints, branches, cb))
 
     if len(prunedTlsPoints) == 0:
         return None

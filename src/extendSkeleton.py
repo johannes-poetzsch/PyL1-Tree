@@ -46,18 +46,18 @@ def extendSkeleton(stem: Branch,
     branches = list(breadthFirstSearch(stem)) # TODO: make this an extra method?
 
     for cluster, root in zip(clusters, newSubtreeRoots):
-        prunedTlsPoints.append(Branch.assignPoints(unassignedTlsPoints[cluster],
-                                                   branches,
-                                                   closeBranches=list(breadthFirstSearch(root)),
-                                                   useTrimming=True))
+        prunedTlsPoints.append(Branch.assignLocalPoints(unassignedTlsPoints[cluster],
+                                                        branches,
+                                                        closeBranches=list(breadthFirstSearch(root)),
+                                                        useTrimming=True))
 
     for branch in branches:
         tlsPoints = branch.tlsPoints
         branch.tlsPoints = np.empty([0,3], dtype=np.double)
-        prunedTlsPoints.append(Branch.assignPoints(tlsPoints,
-                                                   branches,
-                                                   closeBranches=[branch],
-                                                   useTrimming=True))
+        prunedTlsPoints.append(Branch.assignLocalPoints(tlsPoints,
+                                                        branches,
+                                                        closeBranches=[branch],
+                                                        useTrimming=True))
 
     return prunedTlsPoints
 

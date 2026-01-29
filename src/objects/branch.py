@@ -2,7 +2,7 @@ from __future__ import annotations
 import cupy as cp
 import numpy as np
 import numpy.typing as npt
-from typing import List, Optional, Tuple
+from typing import Iterable, List, Optional, Tuple
 
 from ..utils.branchUtils import findCloseBranches
 from ..utils.geometry import getStripAngles, linesPointsDistances, stripPointsDistances
@@ -119,21 +119,21 @@ class Branch:
     
 
     def updateSkeletonMeasurements(self):
-        self.__boundingBoxMin = np.min(self.skeletonPoints, axis=0)
-        self.__boundingBoxMax = np.max(self.skeletonPoints, axis=0)
+        self.boundingBoxMin = np.min(self.skeletonPoints, axis=0)
+        self.boundingBoxMax = np.max(self.skeletonPoints, axis=0)
 
         segments = self.skeletonPoints[1:] - self.skeletonPoints[:-1]
         self.length = np.linalg.norm(segments, axis=-1).sum()
 
 
     def getBoundingBoxDistance(self, boundingBoxMin: np.double, boundingBoxMax: np.double):
-        delta1 = np.clip(self.__boundingBoxMin - boundingBoxMax, a_min=0, a_max=None)
-        delta2 = np.clip(boundingBoxMin - self.__boundingBoxMax, a_min=0, a_max=None)
+        delta1 = np.clip(self.boundingBoxMin - boundingBoxMax, a_min=0, a_max=None)
+        delta2 = np.clip(boundingBoxMin - self.boundingBoxMax, a_min=0, a_max=None)
         return np.linalg.norm(delta1 + delta2, axis=-1)
     
 
     def branchBoundingBoxDistance(self, other: Branch):
-        return self.getBoundingBoxDistance(other.__boundingBoxMin, other.__boundingBoxMax)
+        return self.getBoundingBoxDistance(other.boundingBoxMin, other.boundingBoxMax)
     
 
     def expand(self):
@@ -187,29 +187,36 @@ class Branch:
 
 
     @staticmethod
-    def findClosestBranch(points: npt.NDArray[np.double],
-                          branches: List[Branch], 
-                          initialDistances: Optional[npt.NDArray[np.double]] = None,
-                          useTrimming = False):
+    def findClosestBranches(points: npt.NDArray[np.double],
+                            branches: List[Branch],
+                            branchIndices: Optional[Iterable[int]] = None,
+                            initialClosest: Optional[npt.NDArray[np.intp]] = None,
+                            initialDistances: Optional[npt.NDArray[np.double]] = None,
+                            useTrimming = False
+                            ) -> Tuple[npt.NDArray[np.intp], npt.NDArray[np.double]]:
         xp = cp.get_array_module(points)
         pointsMin = points.min(axis=0)
         pointsMax = points.max(axis=0)
 
-        if initialDistances is None:
+        branchIndices = range(len(branches)) if branchIndices is None else branchIndices
+
+        if initialDistances is None or initialClosest is None:
             distances = xp.full(len(points), xp.inf, dtype=xp.double)
+            closest = xp.full(len(points), -1, dtype=int)
         else:
             distances = xp.asarray(initialDistances)
-        
-        closeIndices = []
-        closest = xp.full(len(points), -1, dtype=int)
+            closest = initialClosest
+
         maxDistance = distances.max()
 
-        for idx, branch in enumerate(branches):
+        for idx in branchIndices:
+            branch = branches[idx]
             if branch.getBoundingBoxDistance(pointsMin, pointsMax) >= maxDistance:
                 continue
 
             if useTrimming:
-                dist, trimmed = branch.getDistances(points, trimStart=branch.isStem(), trimEnd=branch.isLeaf(), returnTrimming=True)
+                dist, trimmed = branch.getDistances(points, trimStart=branch.isStem(), trimEnd=branch.isLeaf(),
+                                                    returnTrimming=True)
             else:
                 dist = branch.getDistances(points)
             improved = dist < distances
@@ -219,55 +226,82 @@ class Branch:
                 maxDistance = distances.max()
 
                 if branch.isRemoved:
-                    closest[improved] = -2
+                    closest[improved] = -1
                 else:
                     closest[improved] = idx
-                    closeIndices.append(idx)
                     if useTrimming:
-                        closest[improved & trimmed] = -2
+                        closest[improved & trimmed] = -1
 
         if xp is cp:
-            closest, distances, closeIndices = cp.asnumpy(closest), cp.asnumpy(distances), cp.asnumpy(closeIndices)
+            closest, distances = cp.asnumpy(closest), cp.asnumpy(distances)
         
-        return closest, distances, closeIndices
+        return closest, distances
 
 
     @staticmethod
-    def assignPoints(points: npt.NDArray[np.double],
-                     branches: List[Branch],
-                     closeBranches: List[Branch],
-                     originalDistances: Optional[npt.NDArray[np.double]] = None,
-                     useTrimming = False) -> npt.NDArray[np.double]:
+    def findLocalClosestBranches(points: npt.NDArray[np.double],
+                                 branches: List[Branch],
+                                 closeBranches: List[Branch],
+                                 originalDistances: Optional[npt.NDArray[np.double]] = None,
+                                 useTrimming = False
+                                 ) -> Tuple[npt.NDArray[np.intp], npt.NDArray[np.double]]:
         xp = cp.get_array_module(points)
 
-        otherBranches = [b for b in branches if b not in closeBranches]
-        closeIndices, distances, _ = Branch.findClosestBranch(points, closeBranches, useTrimming=useTrimming)
+        closeBranches = set(closeBranches)
+        closeBranchIndices, otherBranchIndices = [], []
+        for idx in range(len(branches)):
+            (closeBranchIndices if branches[idx] in closeBranches else otherBranchIndices).append(idx)
+
+        closeIndices, distances = Branch.findClosestBranches(points, branches,
+                                                             branchIndices=closeBranchIndices,
+                                                             useTrimming=useTrimming)
 
         if originalDistances is not None:
             worsened = xp.asarray(distances > originalDistances)
-            closestIndices = xp.full(len(points), -1, dtype=int)
-            closestIndices[worsened], _, nearBranches = Branch.findClosestBranch(points[worsened], otherBranches,
-                                                                                 initialDistances=distances[worsened],
-                                                                                 useTrimming=useTrimming)
+            closestIndices = closeIndices
+            closestIndices[worsened], distances[worsened] = Branch.findClosestBranches(
+                points[worsened], branches,
+                branchIndices=otherBranchIndices,
+                initialClosest=closeIndices[worsened],
+                initialDistances=distances[worsened],
+                useTrimming=useTrimming)
         else:
-            closestIndices, _, nearBranches = Branch.findClosestBranch(points, otherBranches,
-                                                                       initialDistances=distances,
-                                                                       useTrimming=useTrimming)
+            closestIndices, distances = Branch.findClosestBranches(points, branches,
+                                                                   branchIndices=otherBranchIndices,
+                                                                   initialClosest=closeIndices,
+                                                                   initialDistances=distances,
+                                                                   useTrimming=useTrimming)
+
+        return closestIndices, distances
+
+
+    @staticmethod
+    def assignLocalPoints(points: npt.NDArray[np.double],
+                          branches: List[Branch],
+                          closeBranches: List[Branch],
+                          originalDistances: Optional[npt.NDArray[np.double]] = None,
+                          useTrimming = False) -> npt.NDArray[np.double]:
+        closestBranchIndices, _ = Branch.findLocalClosestBranches(points, branches, closeBranches,
+                                                                  originalDistances, useTrimming)
 
         if cp.get_array_module(points) is cp:
             points = cp.asnumpy(points)
 
-        isAtCloseBranch = closestIndices == -1
-        pointsAtCloseBranches = points[isAtCloseBranch]
-        for idx, branch in enumerate(closeBranches):
-            branch.tlsPoints = np.append(branch.tlsPoints,
-                                         pointsAtCloseBranches[closeIndices[isAtCloseBranch] == idx], axis=0)
+        branchOrder = np.argsort(closestBranchIndices)
+        points = points[branchOrder]
+        closestBranchIndices = closestBranchIndices[branchOrder]
 
-        for idx in nearBranches:
-            branch: Branch = otherBranches[idx]
-            branch.tlsPoints = np.append(branch.tlsPoints, points[closestIndices == idx], axis=0)
+        branchIndices, indices, counts = np.unique(closestBranchIndices, return_index=True, return_counts=True)
 
-        unassignedPoints = points[closestIndices == -2]
+        unassignedPoints = np.empty((0,3), dtype=points.dtype)
+
+        for branchIdx, idx, count in zip(branchIndices, indices, counts):
+            if branchIdx < 0:
+                unassignedPoints = points[idx:idx+count]
+                continue
+            branch = branches[branchIdx]
+            branch.tlsPoints = np.append(branch.tlsPoints, points[idx:idx+count], axis=0)
+
         return unassignedPoints
 
 
@@ -276,10 +310,16 @@ class Branch:
                         branches: List[Branch],
                         useTrimming = False) -> npt.NDArray[np.double]:
         closeBranchIndices = findCloseBranches(points, branches)
-        unassignedPoints = []
-        for idx, branch in enumerate(branches):
-            unassignedPoints.append(Branch.assignPoints(points[closeBranchIndices == idx],
-                                                        [branch],
-                                                        useTrimming=useTrimming))
 
+        branchOrder = np.argsort(closeBranchIndices)
+        closeBranchIndices = closeBranchIndices[branchOrder]
+        points = points[branchOrder]
+
+        branchIndices, indices, counts = np.unique(closeBranchIndices, return_index=True, return_counts=True)
+
+        unassignedPoints = []
+        for branchIdx, idx, count in zip(branchIndices, indices, counts):
+            unassignedPoints.append(
+                Branch.assignLocalPoints(points[idx:idx+count], branches, [branches[branchIdx]],
+                                         useTrimming=useTrimming))
         return np.concatenate(unassignedPoints, axis=0)
