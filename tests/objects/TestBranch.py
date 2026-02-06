@@ -13,8 +13,7 @@ def branch() -> Branch:
     return Branch(id=0,
                   skeletonIDs=np.arange(3, dtype=np.intp),
                   skeletonPoints=np.arange(9, dtype=np.double).reshape((3, 3)),
-                  tlsPoints=np.arange(27, dtype=np.double).reshape((9, 3)),
-                  cenOrder=0)
+                  tlsPoints=np.arange(27, dtype=np.double).reshape((9, 3)))
 
 
 def test_to_gpu(branch):

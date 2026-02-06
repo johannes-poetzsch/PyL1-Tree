@@ -6,7 +6,7 @@ from scipy.spatial import KDTree
 from typing import Dict, List
 
 from .objects.branch import Branch
-from .utils.branchUtils import generateSearchRanges
+from .utils.branchUtils import generateSearchRanges, reassignAllPoints
 from .utils.geometry import getStripAngles, normalizeVectors, stripPointsDistances
 from .utils.iteration import breadthFirstSearch
 from .utils.pointMetrics import calculateDensity
@@ -18,11 +18,12 @@ def smoothBranches(stem: Branch,
     branches = list(breadthFirstSearch(stem))
 
     removeBranchAnomalies(stem)
-    unassignedTlsPoints = reassignAllPoints(stem, unassignedTlsPoints)
+    unassignedTlsPoints = reassignAllPoints(list(breadthFirstSearch(stem)), unassignedTlsPoints)
     searchRanges = {}
-    generateSearchRanges(stem, searchRanges, useTrimming=True, useMedianForStem=False)
+    generateSearchRanges(list(breadthFirstSearch(stem)), searchRanges,
+                         useTrimming=True, useMedianForStem=False)
     unassignedTlsPoints = np.append(unassignedTlsPoints, limitToRange(branches, searchRanges), axis=0)
-    
+
     allTlsPoints = [unassignedTlsPoints]
     for branch in branches:
         allTlsPoints.append(branch.tlsPoints)
@@ -63,20 +64,6 @@ def removeBranchAnomalies(stem):
             raise ValueError("Did not expect a terminal point to be anomalous.")
         if wasChanged:
             branch.updateSkeletonMeasurements()
-
-
-def reassignAllPoints(stem: Branch, unassignedTlsPoints: npt.NDArray[np.double]) -> npt.NDArray[np.double]:
-    branches = list(breadthFirstSearch(stem))
-    prunedTlsPoints = []
-
-    for branch in branches:
-        tlsPoints = branch.tlsPoints
-        branch.tlsPoints = np.empty([0,3], dtype=np.double)
-        prunedTlsPoints.append(Branch.assignLocalPoints(tlsPoints, branches, closeBranches=[branch], useTrimming=True))
-
-    prunedTlsPoints.append(Branch.assignAllPoints(unassignedTlsPoints, branches, useTrimming=True))
-
-    return np.concatenate(prunedTlsPoints, axis=0)
 
 
 def limitToRange(branches: List[Branch], 

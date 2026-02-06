@@ -43,7 +43,7 @@ def import_tree_model(eng: m.MatlabEngine) -> Tuple[List[Branch], npt.NDArray[np
         skeletonPoints = np.array(eng.eval(f"treeModel({branchIndex+1}).Curve"), dtype=np.double)
         cenOrder = int(eng.eval(f"treeModel({branchIndex+1}).CenOrder")) - 1
 
-        treeModel.append(Branch(branchIndex, skeletonIDs, skeletonPoints, tlsPoints[tlsBranchIDs == branchIndex], cenOrder))
+        treeModel.append(Branch(branchIndex, skeletonIDs, skeletonPoints, tlsPoints[tlsBranchIDs == branchIndex]))
 
     for [branch1, branch2] in combinations(treeModel, 2):
         if branch1.skeletonIDs[0] == branch2.skeletonIDs[-1]:

@@ -1,13 +1,11 @@
-import cupy as cp
 import numpy as np
 import numpy.typing as npt
+from typing import List, Optional, Tuple
 
-from typing import Dict, List, Optional, Tuple
-
-from .objects.branch import Branch
-from .utils.branchUtils import generateSearchRanges
-from .utils.geometry import angle, linesPointsDistances, normalizeVectors
-from .utils.iteration import breadthFirstSearch
+from objects.branch import Branch
+from utils.branchUtils import generateSearchRanges
+from utils.geometry import angle, linesPointsDistances, normalizeVectors
+from utils.iteration import breadthFirstSearch
 
 
 def filterBranches(stem: Branch, parameters: dict) -> Optional[npt.NDArray[np.double]]:

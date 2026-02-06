@@ -1,8 +1,9 @@
 import cupy as cp
+import networkx as nx
 import numpy as np
 import numpy.typing as npt
 from scipy.spatial import KDTree
-from typing import List
+from typing import List, Optional
 
 from .geometry import angle, normalizeVectors
 from ..objects.branch import Branch
@@ -11,8 +12,13 @@ from ..objects.branch import Branch
 def buildSubtreeFromGraph(skeletonGraph: nx.DiGraph,
                           skeletonPoints: npt.NDArray[np.double],
                           rootIdx: int,
-                          nextIdx: int,
-                          parent: Branch = None):
+                          nextIdx: Optional[int] = None,
+                          parent: Optional[Branch] = None) -> Branch:
+    if nextIdx is None:
+        if len(skeletonGraph.successors(rootIdx)) != 1:
+            raise ValueError("Unclear next index for graph traversal")
+        else:
+            nextIdx = skeletonGraph.successors(rootIdx)[0]
     pointIndices = [rootIdx, nextIdx]
 
     while True:
@@ -23,7 +29,7 @@ def buildSubtreeFromGraph(skeletonGraph: nx.DiGraph,
             break
 
     branch = Branch(id=-1,
-                    skeletonIDs=np.arange(len(pointIndices)),
+                    skeletonIDs=np.array(pointIndices),
                     skeletonPoints=skeletonPoints[pointIndices],
                     parent=parent)
 
@@ -31,6 +37,24 @@ def buildSubtreeFromGraph(skeletonGraph: nx.DiGraph,
         buildSubtreeFromGraph(skeletonGraph, skeletonPoints, pointIndices[-1], s, branch)
 
     return branch
+
+
+def condenseSkeletonPointIds(branches: List[Branch]) -> np.intp:
+    maxId = 0
+    for branch in branches:
+        maxId = max(maxId, np.max(branch.skeletonIDs))
+
+    idsAreUsed = np.zeros(maxId, dtype=np.intp)
+    for branch in branches:
+        idsAreUsed[branch.skeletonIDs] = 1
+
+    idTable = np.cumsum(idsAreUsed) - 1
+    skeletonPointCount = idTable[-1] + 1
+
+    for branch in branches:
+        branch.skeletonIDs = idTable[branch.skeletonIDs]
+
+    return skeletonPointCount
 
 
 def generateSearchRanges(branches: List[Branch], # have to be semi-ordered by distance from stem
@@ -56,7 +80,7 @@ def generateSearchRanges(branches: List[Branch], # have to be semi-ordered by di
 
         if not branch.isStem():
             validParent = branch.parent
-            while not validParent.isStem() and validParent.length <= 0.2: # TODO: check magic number
+            while validParent.length <= 0.2 and not validParent.isStem(): # TODO: check magic number
                 validParent = validParent.parent
             searchRange = xp.minimum(searchRange, searchRangeLookUp[validParent])
 
@@ -75,6 +99,23 @@ def findCloseBranches(points: npt.NDArray[np.double],
     closeBranchIndices = branchIds[closestIndices]
 
     return closeBranchIndices
+
+
+def reassignAllPoints(branches: List[Branch],
+                      unassignedTlsPoints: npt.NDArray[np.double],
+                      useTrimming: bool = True
+                      ) -> npt.NDArray[np.double]:
+    prunedTlsPoints = []
+
+    for branch in branches:
+        tlsPoints = branch.tlsPoints
+        branch.tlsPoints = np.empty([0,3], dtype=np.double)
+        prunedTlsPoints.append(Branch.assignLocalPoints(tlsPoints, branches, closeBranches=[branch],
+                                                        useTrimming=useTrimming))
+
+    prunedTlsPoints.append(Branch.assignAllPoints(unassignedTlsPoints, branches, useTrimming=True))
+
+    return np.concatenate(prunedTlsPoints, axis=0)
 
 
 def splitAndGetEndPointIds(branch: Branch) -> List[np.intp]:

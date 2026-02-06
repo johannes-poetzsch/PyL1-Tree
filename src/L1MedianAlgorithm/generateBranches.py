@@ -8,7 +8,7 @@ from ..objects.branch import Branch
 from ..utils.pointMetrics import calculateDensity, decayingWeights
 
 
-def generateSkeleton(tlsPoints: npt.NDArray[np.double],
+def generateBranches(tlsPoints: npt.NDArray[np.double],
                      seedPoints: npt.NDArray[np.double],
                      relPathLocations: npt.NDArray[np.double],
                      parameters: Dict[str, Any]) -> List[Branch]:
