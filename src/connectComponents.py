@@ -27,16 +27,15 @@ class Component:
 
     def getDirectionData(self,
                          branch: Branch,
-                         isEndPoint: npt.NDArray[bool],
                          minDistanceThreshold: float
                          ) -> (Tuple[Optional[npt.NDArray[np.double]], Optional[npt.NDArray[np.double]]] |
                                Tuple[int | npt.NDArray[np.double], Optional[npt.NDArray[np.double]]]):
         if branch not in self.directionData:
-            self.generateDirectionData(branch, isEndPoint, minDistanceThreshold)
+            self.generateDirectionData(branch, minDistanceThreshold)
         return self.directionData[branch]
 
 
-    def generateDirectionData(self, branch: Branch, isEndPoint: npt.NDArray[bool], minDistanceThreshold: float):
+    def generateDirectionData(self, branch: Branch, minDistanceThreshold: float):
         raise NotImplementedError("only implemented by subclasses")
 
 
@@ -52,7 +51,7 @@ class ConnectedComponent(Component):
         self.boundingBoxMax = np.maximum(self.boundingBoxMax, subComponent.boundingBoxMax)
 
 
-    def generateDirectionData(self, branch: Branch, isEndPoint: npt.NDArray[bool], minDistanceThreshold: float):
+    def generateDirectionData(self, branch: Branch, minDistanceThreshold: float):
         self.directionData[branch] = []
         maxIdx = len(branch.skeletonPoints) - 1
 
@@ -60,18 +59,18 @@ class ConnectedComponent(Component):
         firstHandledIdx = 0 if branch.isStem() else 1 # TODO: rework, since branch is already connected
 
         for idx in range(firstHandledIdx, maxIdx):
-            prePointDirections = getDirections(idx, -1, branch, isEndPoint, minDistanceThreshold)
-            postPointDirections = getDirections(idx, 1, branch, isEndPoint, minDistanceThreshold)
+            prePointDirections = getDirections(idx, -1, branch, minDistanceThreshold)
+            postPointDirections = getDirections(idx, 1, branch, minDistanceThreshold)
 
             prePointDirections = np.stack(prePointDirections) if len(prePointDirections) > 0 else None
             postPointDirections = np.stack(postPointDirections) if len(postPointDirections) > 0 else None
             self.directionData[branch].append((prePointDirections, postPointDirections))
 
         # tip point of branch
-        prePointDirections = getDirections(maxIdx, -1, branch, isEndPoint, minDistanceThreshold)
+        prePointDirections = getDirections(maxIdx, -1, branch, minDistanceThreshold)
         postPointDirections = []
         for child in branch.children:
-            postPointDirections.append(getDirections(0, 1, child, isEndPoint, minDistanceThreshold))
+            postPointDirections.append(getDirections(0, 1, child, minDistanceThreshold))
 
         prePointDirections = np.stack(prePointDirections) if len(prePointDirections) > 0 else None
         postPointDirections = np.stack(postPointDirections) if len(postPointDirections) > 0 else None
@@ -85,10 +84,8 @@ class UnconnectedComponent(Component):
         self.bestConnectionScore = 0
         self.directionData = {}
 
-    def connect(self,
-                defaultId: np.intp,
-                resolution: float
-                ) -> ConnectedComponent:
+
+    def connect(self, resolution: float) -> ConnectedComponent:
         if self.bestConnection is None:
             raise ValueError("Components can not be connected.")
         startBranch, startIdx, endBranch, endIdx = self.bestConnection
@@ -98,14 +95,11 @@ class UnconnectedComponent(Component):
 
         pointNumber = 2 + np.floor(connectionLength / resolution)
         skeletonPoints = np.linspace(startPoint, endPoint, pointNumber, endpoint=True)
-        skeletonIDs = np.array([startBranch.skeletonIDs[startIdx]] +
-                               (pointNumber - 2) * [defaultId] +
-                               [endBranch.skeletonIDs[endIdx]], dtype=np.intp)
         tlsPoints = np.empty((0, 3), dtype=np.double)
 
         parent = startBranch.split(startIdx)
 
-        connectionBranch = Branch(None, skeletonIDs, skeletonPoints, tlsPoints, parent)
+        connectionBranch = Branch(None, skeletonPoints, tlsPoints, parent)
 
         childBranch = endBranch.split(endIdx)
         if childBranch is None:  # connection end point is root point of the component
@@ -117,22 +111,22 @@ class UnconnectedComponent(Component):
         return connectedComponent
 
 
-    def generateDirectionData(self, branch: Branch, isEndPoint: npt.NDArray[bool], minDistanceThreshold: float):
+    def generateDirectionData(self, branch: Branch, minDistanceThreshold: float):
         self.directionData[branch] = []
-        endPointIndices = np.flatnonzero(isEndPoint[branch.skeletonIDs])
+        endPointIndices = np.flatnonzero(branch.isEndPoint(np.arange(len(branch.skeletonPoints), dtype=int)))
 
         for i, idx in enumerate(endPointIndices):
-            if i >= 1 and not directionIsIgnored(idx, endPointIndices[i-1], branch, isEndPoint, minDistanceThreshold):
+            if i >= 1 and not directionIsIgnored(idx, endPointIndices[i-1], branch, minDistanceThreshold):
                 startDirection = normalizeVectors(
                     branch.skeletonPoints[idx] - branch.skeletonPoints[endPointIndices[i-1]])
             elif (i+1 < len(endPointIndices) and
-                  not directionIsIgnored(idx, endPointIndices[i+1], branch, isEndPoint, minDistanceThreshold)):
+                  not directionIsIgnored(idx, endPointIndices[i+1], branch, minDistanceThreshold)):
                 startDirection = normalizeVectors(
                     branch.skeletonPoints[idx] - branch.skeletonPoints[endPointIndices[i+1]])
             else:
                 continue
-            firstHalfDirections = getDirections(idx, -1, branch, isEndPoint, minDistanceThreshold)
-            secondHalfDirections = getDirections(idx, 1, branch, isEndPoint, minDistanceThreshold)
+            firstHalfDirections = getDirections(idx, -1, branch, minDistanceThreshold)
+            secondHalfDirections = getDirections(idx, 1, branch, minDistanceThreshold)
             directions = firstHalfDirections + secondHalfDirections
 
             directions = np.stack(directions) if len(directions) > 0 else None
@@ -142,16 +136,14 @@ class UnconnectedComponent(Component):
 def directionIsIgnored(idx_1: int | npt.NDArray[np.intp],
                        idx_2: int | npt.NDArray[np.intp],
                        branch: Branch,
-                       isEndPoint: npt.NDArray[bool],
                        minDistanceThreshold: float) -> bool | npt.NDArray[bool]:
-    return (isEndPoint[branch.skeletonIDs[idx_1]] & isEndPoint[branch.skeletonIDs[idx_2]] &
+    return (branch.isEndPoint(idx_1) & branch.isEndPoint(idx_2) &
             np.linalg.norm(branch.skeletonPoints[idx_1] - branch.skeletonPoints[idx_2]) <= minDistanceThreshold)
 
 
 def getDirections(idx: int,
                   orientation: int,  # 1 or -1, determines the orientations of directions along the branch
                   branch: Branch,
-                  isEndPoint: npt.NDArray[bool],
                   minDistanceThreshold: float) -> List[npt.NDArray[np.double]]:
     if orientation == 1:
         endIdx = len(branch.skeletonPoints) - 1
@@ -165,13 +157,13 @@ def getDirections(idx: int,
 
     directions = []
     # direction of whole branch
-    if not directionIsIgnored(endIdx, idx, branch, isEndPoint, minDistanceThreshold):
+    if not directionIsIgnored(endIdx, idx, branch, minDistanceThreshold):
         directions.append(normalizeVectors(branch.skeletonPoints[endIdx] - branch.skeletonPoints[idx]))
 
     nextIdx = endIdx + orientation
     # direction at start of branch
     if (nextIdx != endIdx and
-            not directionIsIgnored(nextIdx, idx, branch, isEndPoint, minDistanceThreshold)):
+            not directionIsIgnored(nextIdx, idx, branch, minDistanceThreshold)):
         directions.append(normalizeVectors(branch.skeletonPoints[nextIdx] - branch.skeletonPoints[idx]))
 
     return directions
@@ -258,7 +250,6 @@ def getComponentPoints(component: Component,
 def connectComponents(rootComponentStem: Branch,
                       unconnectedComponentStems: List[Branch],
                       unassignedPoints: npt.NDArray[np.double],
-                      isEndPoint: npt.NDArray[bool],
                       minDistanceThreshold: float,
                       maxDistanceThreshold: float,
                       minAngleThreshold: float,
@@ -277,8 +268,6 @@ def connectComponents(rootComponentStem: Branch,
     assignedPoints = np.concatenate([b.tlsPoints for b in allBranches], axis=0)
     assignedPointsLookUp = KDTree(assignedPoints)
 
-    defaultId = np.flatnonzero(~isEndPoint)[0]
-
     unassignedPointsLookUp = KDTree(unassignedPoints)
 
     originalMaxDistanceThreshold = maxDistanceThreshold
@@ -291,7 +280,7 @@ def connectComponents(rootComponentStem: Branch,
         for otherComponent in unconnectedComponents:
             if currentComponent.getBoundingBoxDistance(otherComponent) <= maxDistanceThreshold:
                 updateBestConnection(currentComponent, otherComponent, allBranches,
-                                     assignedPointsLookUp, unassignedPointsLookUp, isEndPoint,
+                                     assignedPointsLookUp, unassignedPointsLookUp,
                                      minDistanceThreshold, maxDistanceThreshold, maxCheckedDistance,
                                      minAngleThreshold, maxAngleThreshold,
                                      windowSize, densityFactor)
@@ -336,7 +325,6 @@ def updateBestConnection(rootComponent: ConnectedComponent,
                          allBranches: List[Branch],
                          assignedPointsLookUp: KDTree,
                          unassignedPointsLookUp: KDTree,
-                         isEndPoint: npt.NDArray[np.bool],
                          minDistanceThreshold: float,
                          maxDistanceThreshold: float,
                          maxCheckedDistance: float,
@@ -351,12 +339,12 @@ def updateBestConnection(rootComponent: ConnectedComponent,
     for endBranch in unconnectedComponent.branches:
         if rootComponent.getBoundingBoxDistance(endBranch) > maxDistanceThreshold:
             continue
-        directionsAtEnd = unconnectedComponent.getDirectionData(endBranch, isEndPoint, minDistanceThreshold)
+        directionsAtEnd = unconnectedComponent.getDirectionData(endBranch, minDistanceThreshold)
 
         for startBranch, searchRange in zip(rootComponent.branches, searchRanges):
             if startBranch.branchBoundingBoxDistance(endBranch) > maxDistanceThreshold:
                 continue
-            directionsAtStart = rootComponent.getDirectionData(startBranch, isEndPoint, minDistanceThreshold)
+            directionsAtStart = rootComponent.getDirectionData(startBranch, minDistanceThreshold)
 
             for endIdx, startDirection, childDirections in directionsAtEnd:
                 for startIdx, (parentDirections, siblingDirections) in enumerate(directionsAtStart):

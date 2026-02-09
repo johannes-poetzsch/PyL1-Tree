@@ -55,8 +55,8 @@ def removeBranchAnomalies(stem):
             if maxAngle >= rightAngle:
                 deletionIdx = maxIdx + 2
                 # TODO: this may be slow -> use mask instead?
-                branch.skeletonIDs = np.delete(branch.skeletonIDs, deletionIdx)
                 branch.skeletonPoints = np.delete(branch.skeletonPoints, deletionIdx, axis=0)
+                branch.endPointIndices = None
                 wasChanged = True
             else:
                 break

@@ -18,28 +18,29 @@ def adjustBifurcations(stem, parameters):
     xp = np
 
     for parent in breadthFirstSearch(stem, returnLeaves=False):
-        while parent is not None and not parent.isRemoved:
-            if len(parent.children) < 2:
+        adjustmentCompleted = False
+        while not adjustmentCompleted:
+            if parent is None or parent.isRemoved or len(parent.children) < 2:
                 break
 
-            bifurcationId = parent.skeletonIDs[-1]
             associatedBranches = [parent] + list(parent.children)
 
-            # TODO: only flip parent
-            for branch in associatedBranches:
-                # make sure bifurcation is start of each associated branch
-                branch.orientToBifurcation(bifurcationId)
+            # make sure bifurcation is start of each associated branch
+            parent.flip()
             
             tlsPoints = xp.asarray(xp.concatenate([b.tlsPoints for b in associatedBranches]))
             adjustmentIdx, adjustmentPoint, adjustmentBranch = determineAdjustment(associatedBranches, parent, tlsPoints, parameters)
 
-            if adjustmentIdx is None:
-                parent = None
-            else:
-                parent = applyAdjustment(stem, associatedBranches, parent, adjustmentIdx, adjustmentPoint, adjustmentBranch, tlsPoints)
+            newParent = parent if adjustmentIdx is None else (
+                applyAdjustment(stem, associatedBranches, adjustmentIdx, adjustmentPoint, adjustmentBranch, tlsPoints))
 
-            for branch in associatedBranches:
-                branch.unflip()
+            parent.unflip()
+
+            if newParent is parent:
+                adjustmentCompleted = True
+            else:
+                # the bifurcation was merged with the previous bifurcation and the result has to adjusted too
+                parent = newParent
 
 
 def determineAdjustment(associatedBranches: List[Branch],
@@ -135,8 +136,7 @@ def determineAdjustment(associatedBranches: List[Branch],
 
 def applyAdjustment(stem: Branch, 
                     associatedBranches: List[Branch],
-                    parentBranch: Branch,
-                    adjustmentIdx: np.intp, 
+                    adjustmentIdx: int,
                     adjustmentPoint: npt.NDArray[np.double], 
                     adjustmentBranch: Branch,
                     tlsPoints: npt.NDArray[cp.double]) -> Branch:
@@ -144,27 +144,23 @@ def applyAdjustment(stem: Branch,
 
     originalDistances = xp.min(xp.stack([b.getDistances(tlsPoints) for b in associatedBranches]), axis=0)
 
-    adjustmentBranch.skeletonIDs = adjustmentBranch.skeletonIDs[adjustmentIdx:] # TODO: test and fix for behaviour with flipping and interpolation
     adjustmentBranch.skeletonPoints = adjustmentBranch.skeletonPoints[adjustmentIdx:]
-
-    bifurcationId = adjustmentBranch.skeletonIDs[0]
 
     for branch in associatedBranches:
         branch.tlsPoints = np.empty([0,3], dtype=np.double)
-        branch.skeletonIDs[0] = bifurcationId
         branch.skeletonPoints[0] = adjustmentPoint
         branch.updateSkeletonMeasurements()
         branch.unflip()
 
     newParent = None
-    if adjustmentBranch.skeletonIDs.size <= 1:
+    if len(adjustmentBranch.skeletonPoints) <= 1:
         # if the current parent is removed, save the new parent to adjust the new combined bifurcation
         newParent = adjustmentBranch.parent
         # branch can be removed
         del(associatedBranches[associatedBranches.index(adjustmentBranch)])
         adjustmentBranch.remove()
 
-    Branch.assignLocalPoints(tlsPoints, otherBranches=list(breadthFirstSearch(stem)),
+    Branch.assignLocalPoints(tlsPoints, branches=list(breadthFirstSearch(stem)),
                              closeBranches=associatedBranches, originalDistances=originalDistances)
 
     return newParent

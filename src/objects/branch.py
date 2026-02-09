@@ -2,7 +2,7 @@ from __future__ import annotations
 import cupy as cp
 import numpy as np
 import numpy.typing as npt
-from typing import Iterable, List, Optional, Tuple
+from typing import Iterable, List, Optional, Set, Tuple
 
 from ..utils.branchUtils import findCloseBranches
 from ..utils.geometry import getStripAngles, linesPointsDistances, stripPointsDistances
@@ -11,15 +11,14 @@ from ..utils.geometry import getStripAngles, linesPointsDistances, stripPointsDi
 class Branch:
     def __init__(self,
                  id: Optional[int],
-                 skeletonIDs: npt.NDArray[np.intp],
                  skeletonPoints: npt.NDArray[np.double],
                  tlsPoints: Optional[npt.NDArray[np.double]] = None,
                  parent: Branch = None,
                  onGPU: bool = False):
         self.id = id
         self.isFlipped = False
-        self.skeletonIDs = skeletonIDs
         self.skeletonPoints = skeletonPoints
+        self.endPointIndices: Optional[List[int]] = None
         self.tlsPoints = np.empty([0,3], dtype=np.double) if tlsPoints is None else tlsPoints
         self.onGPU = onGPU
         self.children: set[Branch] = set()
@@ -29,21 +28,29 @@ class Branch:
         self.isRemoved = False
 
 
+    def addEndPoints(self, endPointIndices: Iterable[int]):
+        if self.endPointIndices is None:
+            self.endPointIndices =  [0, len(self.skeletonPoints) - 1]
+        self.endPointIndices += list(endPointIndices)
+
+
+    def isEndPoint(self, idx: int | npt.NDArray[int]) -> bool | npt.NDArray[bool]:
+        idx = idx % len(self.skeletonPoints)
+        if self.endPointIndices is None:
+            return idx == 0 | idx == len(self.skeletonPoints) - 1
+        else:
+            return np.isin(idx, self.endPointIndices)
+
+
+    def flip(self):
+        self.isFlipped = not self.isFlipped
+        self.skeletonPoints = np.flipud(self.skeletonPoints)
+
+
     def unflip(self):
         if self.isFlipped:
             self.isFlipped = False
-            self.skeletonIDs = np.flipud(self.skeletonIDs)
             self.skeletonPoints = np.flipud(self.skeletonPoints)
-
-
-    def orientToBifurcation(self,
-                            bifurcationID: np.intp):
-        if self.skeletonIDs[-1] == bifurcationID:
-            self.isFlipped = not self.isFlipped
-            self.skeletonIDs = np.flipud(self.skeletonIDs)
-            self.skeletonPoints = np.flipud(self.skeletonPoints)
-        elif not self.skeletonIDs[0] == bifurcationID:
-            raise ValueError("Bifurcation can only occur at terminal branch points")
 
 
     def reorientSubtree(self, newParent: Branch):
@@ -51,8 +58,9 @@ class Branch:
             if child is not newParent:
                 child.setParent(newParent)
 
-        self.skeletonIDs = np.flipud(self.skeletonIDs)
         self.skeletonPoints = np.flipud(self.skeletonPoints)
+        if self.endPointIndices is not None:
+            self.endPointIndices = [len(self.skeletonPoints)-1 - idx for idx in self.endPointIndices]
 
         if self.parent is not None:
             self.parent.reorientSubtree(self)
@@ -66,18 +74,26 @@ class Branch:
         if splitIdx >= len(self.skeletonPoints) - 1:
             return self
 
-        splitEnd = Branch(self.id, self.skeletonIDs[splitIdx:], self.skeletonPoints[splitIdx:])
+        splitEnd = Branch(self.id, self.skeletonPoints[splitIdx:])
 
         for child in list(self.children):
             child.setParent(splitEnd)
 
         splitEnd.setParent(self)
-        self.skeletonIDs = self.skeletonIDs[:splitIdx+1]
         self.skeletonPoints = self.skeletonPoints[:splitIdx+1]
         if len(self.tlsPoints) > 0:
             tlsPoints = self.tlsPoints
             self.tlsPoints = np.empty([0,3], dtype=np.double)
             Branch.assignLocalPoints(tlsPoints, [self, splitEnd])
+
+        if self.endPointIndices is not None:
+            endPointIndices = self.endPointIndices
+            self.endPointIndices = None
+            for idx in [i for i in endPointIndices if i not in [0, splitIdx, len(self.skeletonPoints) - 1]]:
+                if idx < splitIdx:
+                    self.addEndPoints([idx])
+                else:
+                    splitEnd.addEndPoints([idx])
 
         self.updateSkeletonMeasurements()
 
@@ -156,12 +172,20 @@ class Branch:
         if len(self.children) != 1:
             raise ValueError("Only branches with a single child branch can be expanded")
         child = self.children.pop()
+
         if self.isFlipped or child.isFlipped:
             raise ValueError("Ensure branches are not flipped before expanding!")
-        self.skeletonIDs = np.append(self.skeletonIDs, child.skeletonIDs[1:], axis=0)
+
+        originalPointCount = len(self.skeletonPoints)
         self.skeletonPoints = np.append(self.skeletonPoints, child.skeletonPoints[1:], axis=0)
+        self.addEndPoints([originalPointCount-1])
+        if child.endPointIndices is not None:
+            self.addEndPoints([len(self.skeletonPoints)-1 + idx for idx in child.endPointIndices
+                               if idx not in [0, len(child.skeletonPoints) - 1]])
+
         xp = cp.get_array_module(self.tlsPoints, child.tlsPoints)
         self.tlsPoints = xp.append(self.tlsPoints, child.tlsPoints, axis=0)
+
         self.updateSkeletonMeasurements()
 
 
@@ -183,7 +207,8 @@ class Branch:
         self.parent = parent
 
 
-    def remove(self, adjustConnectedBranches = True) -> npt.NDArray[np.double]:
+    def remove(self,
+               adjustConnectedBranches: bool = True) -> npt.NDArray[np.double]:
         self.isRemoved = True
         parent = self.parent
         self.setParent(None)
@@ -192,7 +217,6 @@ class Branch:
             if adjustConnectedBranches:
                 assert(not self.isFlipped)
                 assert(not child.isFlipped)
-                child.skeletonIDs[0] = self.skeletonIDs[0]
                 child.skeletonPoints[0] = self.skeletonPoints[0]
                 child.updateSkeletonMeasurements()
             child.setParent(parent)

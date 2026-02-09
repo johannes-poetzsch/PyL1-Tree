@@ -42,14 +42,12 @@ def generateBranches(tlsPoints: npt.NDArray[np.double],
 def initializeSkeleton(seedPoints: npt.NDArray[np.double],
                        relPathLocations: npt.NDArray[np.double]) -> npt.NDArray:
     skeletonData = np.zeros(len(seedPoints),
-                            dtype=[("ID", np.intp),
-                                   ("Coords", (np.double, 3)),
+                            dtype=[("Coords", (np.double, 3)),
                                    ("relPathLocation", np.double),
                                    ("Sigma", np.double),
                                    ("isFix", np.bool_),
                                    ("isBranch", np.bool_),
                                    ])
-    skeletonData["ID"] = np.arange(len(seedPoints))
     skeletonData["Coords"] = seedPoints
     skeletonData["relPathLocation"] = relPathLocations
 

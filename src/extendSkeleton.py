@@ -147,7 +147,8 @@ def generateSkeleton(tlsPoints: npt.NDArray[np.double],
         if skeletonGraph is None:
             continue
 
-        firstBranches = [buildSubtreeFromGraph(skeletonGraph, skeletonPoints, 0, s) for s in skeletonGraph.successors(0)]
+        firstBranches = [buildSubtreeFromGraph(skeletonGraph, skeletonPoints, rootIdx=0, nextIdx=s)
+                         for s in skeletonGraph.successors(0)]
         
         if not skeletonIsValid(firstBranches, minLength, minAngleThreshold, smoothAngleThreshold):
             continue
@@ -179,9 +180,8 @@ def connectSkeleton(skeleton: List[Branch],
     junctionBranch = junctionBranch.split(junctionIdx)
 
     rootPoint = skeleton[0].skeletonPoints[0]
-    connectionBranch = Branch(id=-1, 
-                              skeletonIDs=np.arange(2), 
-                              skeletonPoints=np.stack([junctionPoint, rootPoint]), 
+    connectionBranch = Branch(id=-1,
+                              skeletonPoints=np.stack([junctionPoint, rootPoint]),
                               parent=junctionBranch)
     
     for branch in skeleton:

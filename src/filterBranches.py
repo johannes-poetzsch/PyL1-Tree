@@ -1,6 +1,6 @@
 import numpy as np
 import numpy.typing as npt
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 from objects.branch import Branch
 from utils.branchUtils import generateSearchRanges
@@ -8,83 +8,51 @@ from utils.geometry import angle, linesPointsDistances, normalizeVectors
 from utils.iteration import breadthFirstSearch
 
 
-def filterBranches(stem: Branch, parameters: dict) -> Optional[npt.NDArray[np.double]]:
+def filterBranches(stem: Branch,
+                   parameters: dict,
+                   expandBranches = True) -> Optional[npt.NDArray[np.double]]:
     branches = list(breadthFirstSearch(stem))
-    removedBranchesLength, closeBranchesLength = filterByLength(branches,
-                                                                parameters["branchSizeThreshold"],
-                                                                parameters["resolution"])
-    prunedBranches, _ = filterByAngle(branches, parameters["maxAngleThreshold"])
+    trimmedPoints1 = filterByLength(branches, parameters["branchSizeThreshold"], parameters["resolution"])
 
-    branches = [b for b in branches if not b.isRemoved]
-    removedBranchesInfluence, closeBranchesInfluence = (
-        filterByInfluence(branches,generateSearchRanges(branches, useMedianForStem=True)))
+    branches = list(breadthFirstSearch(stem))
+    prunedBranches = pruneByAngle(branches, np.deg2rad(parameters["maxAngleThreshold"]))
 
-    removedBranches = removedBranchesLength + removedBranchesInfluence
-    closeBranches = closeBranchesLength + closeBranchesInfluence
-    prunedTlsPoints = []
+    trimmedPoints2 = filterByInfluence(branches, generateSearchRanges(branches, useMedianForStem=True))
 
-    branches = list(breadthFirstSearch(stem)) + prunedBranches
-    for rb, cb in zip(removedBranches, closeBranches):
-        prunedTlsPoints.append(Branch.assignLocalPoints(rb.tlsPoints, branches, cb))
+    if expandBranches:
+        for branch in breadthFirstSearch(stem):
+            if len(branch.children) == 1:
+                branch.expand()
 
-    if len(prunedTlsPoints) == 0:
-        return None
-    else:
-        return np.concatenate(prunedTlsPoints, axis=0)
+    prunedPoints = np.concatenate([trimmedPoints1] + [trimmedPoints2] + [b.tlsPoints for b in prunedBranches], axis=0)
+
+    return prunedPoints
 
 
 def filterByLength(branches: List[Branch],
                    branchSizeThreshold: int,
-                   resolution: np.double) -> Tuple[List[Branch], List[List[Branch]]]:
-    removedBranches: List[Branch] = []
-    closeBranches: List[List[Branch]] = []
+                   resolution: np.double) -> npt.NDArray[np.double]:
+    trimmedPoints = []
 
     for branch in branches:
-        if (branch.length < resolution * (branchSizeThreshold - 1) 
-            and len(branch.skeletonIDs) < branchSizeThreshold):
+        if (branch.length < resolution * (branchSizeThreshold - 1)
+            and len(branch.skeletonPoints) < branchSizeThreshold):
 
-            closeBranches.append(list(branch.children))
+            closeBranches = list(branch.children)
             if branch.parent is not None: 
-                closeBranches[-1].append(branch.parent)
+                closeBranches.append(branch.parent)
 
-            branch.remove()
-            removedBranches.append(branch)
+            removedPoints = branch.remove()
+            trimmedPoints.append(Branch.assignLocalPoints(removedPoints, branches, closeBranches, useTrimming=True))
 
-    return removedBranches, closeBranches
-
-
-def filterByAngle(branches: List[Branch],
-                  maxAngleThreshold: float) -> Tuple[List[Branch], List[List[Branch]]]:
-    maxAngleThreshold = np.deg2rad(maxAngleThreshold)
-    removedBranches = []
-
-    for branch in branches:
-        if branch.isRemoved or branch.isLeaf():
-            continue
-
-        parentDirections = normalizeVectors(branch.skeletonPoints[1:] - branch.skeletonPoints[:-1])
-
-        for child in branch.children:
-            if child.isRemoved:
-                continue
-
-            childDirection = normalizeVectors(child.skeletonPoints[-1] - child.skeletonPoints[0])
-            _angle = np.median(angle(parentDirections, childDirection))
-
-            if _angle > maxAngleThreshold:
-                for prunedBranch in breadthFirstSearch(child):
-                    prunedBranch.remove(adjustConnectedBranches=False)
-                    removedBranches.append(prunedBranch)
-
-    return removedBranches, [[]] * len(removedBranches)
+    return np.concatenate(trimmedPoints, axis=0)
 
 
 def filterByInfluence(branches: List[Branch],
-                      searchRanges: List[float]) -> Tuple[List[Branch], List[List[Branch]]]:
-    removedBranches: List[Branch] = []
-    closeBranches: List[List[Branch]] = []
-
+                      searchRanges: List[float]) -> npt.NDArray[np.double]:
     assert(branches[0].isStem())
+
+    trimmedPoints = []
     leaves = [b for b in branches if b.isLeaf()]
 
     branches.sort(key=lambda b: b.length, reverse=True) # descending lengths
@@ -100,16 +68,41 @@ def filterByInfluence(branches: List[Branch],
             distances = branch.getDistances(leaf.skeletonPoints, trimStart=True, trimEnd=True, returnTrimming=False)
 
             if len(distances) > len(leaf.skeletonPoints) / 2 and distances.max() < searchRange:
-                leaf.remove()
-                removedBranches.append(leaf)
-                closeBranches.append([branch, leaf.parent])
-    
-    return removedBranches, closeBranches
+                removedPoints = leaf.remove()
+                closeBranches = [branch, leaf.parent]
+                trimmedPoints.append(Branch.assignLocalPoints(removedPoints, branches, closeBranches, useTrimming=True))
+
+    return np.concatenate(trimmedPoints, axis=0)
 
 
-def filterUncenteredBranches(branches: List[Branch]) -> Tuple[List[Branch], List[List[Branch]]]:
+def pruneByAngle(branches: List[Branch],
+                 maxAngleThreshold: float) -> List[Branch]:
+    prunedBranches = []
+
+    for branch in branches:
+        if branch.isRemoved or branch.isLeaf():
+            continue
+
+        directions = normalizeVectors(branch.skeletonPoints[1:] - branch.skeletonPoints[:-1])
+
+        for child in branch.children:
+            if child.isRemoved:
+                continue
+
+            childDirection = normalizeVectors(child.skeletonPoints[-1] - child.skeletonPoints[0])
+            _angle = np.median(angle(directions, childDirection))
+
+            if _angle > maxAngleThreshold:
+                for prunedBranch in breadthFirstSearch(child):
+                    prunedBranch.remove(adjustConnectedBranches=False)
+                    prunedBranches.append(prunedBranch)
+
+    return prunedBranches
+
+
+def pruneUncenteredBranches(branches: List[Branch]) -> List[Branch]:
     minDistance = 0.000001
-    removedBranches: List[Branch] = []
+    prunedBranches: List[Branch] = []
 
     for branch in branches:
         if branch.isRemoved:
@@ -149,6 +142,6 @@ def filterUncenteredBranches(branches: List[Branch]) -> Tuple[List[Branch], List
 
         if angleDiff[1] * np.sqrt(len(angles)) > 720:
             branch.remove()
-            removedBranches.append(branch)
+            prunedBranches.append(branch)
 
-    return removedBranches, [[]] * len(removedBranches)
+    return prunedBranches

@@ -13,12 +13,15 @@ def buildSubtreeFromGraph(skeletonGraph: nx.DiGraph,
                           skeletonPoints: npt.NDArray[np.double],
                           rootIdx: int,
                           nextIdx: Optional[int] = None,
-                          parent: Optional[Branch] = None) -> Branch:
+                          parent: Optional[Branch] = None,
+                          isEndPoint: Optional[npt.NDArray[bool]] = None
+                          ) -> Branch:
     if nextIdx is None:
-        if len(skeletonGraph.successors(rootIdx)) != 1:
+        successors = list(skeletonGraph.successors(rootIdx))
+        if len(successors) != 1:
             raise ValueError("Unclear next index for graph traversal")
         else:
-            nextIdx = skeletonGraph.successors(rootIdx)[0]
+            nextIdx = successors[0]
     pointIndices = [rootIdx, nextIdx]
 
     while True:
@@ -29,32 +32,20 @@ def buildSubtreeFromGraph(skeletonGraph: nx.DiGraph,
             break
 
     branch = Branch(id=-1,
-                    skeletonIDs=np.array(pointIndices),
                     skeletonPoints=skeletonPoints[pointIndices],
                     parent=parent)
 
+    if isEndPoint is not None:
+        endPointIndices = pointIndices[isEndPoint[pointIndices]]
+        if len(endPointIndices) > 2:
+            branch.addEndPoints(endPointIndices[1:-1])
+
     for s in successors:
-        buildSubtreeFromGraph(skeletonGraph, skeletonPoints, pointIndices[-1], s, branch)
+        buildSubtreeFromGraph(skeletonGraph, skeletonPoints,
+                              rootIdx=pointIndices[-1], nextIdx=s,
+                              parent=branch, isEndPoint=isEndPoint)
 
     return branch
-
-
-def condenseSkeletonPointIds(branches: List[Branch]) -> np.intp:
-    maxId = 0
-    for branch in branches:
-        maxId = max(maxId, np.max(branch.skeletonIDs))
-
-    idsAreUsed = np.zeros(maxId, dtype=np.intp)
-    for branch in branches:
-        idsAreUsed[branch.skeletonIDs] = 1
-
-    idTable = np.cumsum(idsAreUsed) - 1
-    skeletonPointCount = idTable[-1] + 1
-
-    for branch in branches:
-        branch.skeletonIDs = idTable[branch.skeletonIDs]
-
-    return skeletonPointCount
 
 
 def generateSearchRanges(branches: List[Branch], # have to be semi-ordered by distance from stem
@@ -118,16 +109,15 @@ def reassignAllPoints(branches: List[Branch],
     return np.concatenate(prunedTlsPoints, axis=0)
 
 
-def splitAndGetEndPointIds(branch: Branch) -> List[np.intp]:
-    endPoints = [branch.skeletonIDs[0], branch.skeletonIDs[-1]]
-    if len(branch.skeletonIDs) < 4:
-        return endPoints
+def splitAndAddEndPoints(branch: Branch):
+    if len(branch.skeletonPoints) < 4:
+        return
 
     startDirection = normalizeVectors(branch.skeletonPoints[1] - branch.skeletonPoints[0])
     endDirection = normalizeVectors(branch.skeletonPoints[-1] - branch.skeletonPoints[-2])
 
     if angle(startDirection, endDirection) < np.pi / 2: # acute angle are fine
-        return endPoints
+        return
 
     firstPartDirections = normalizeVectors(branch.skeletonPoints[1:-2] - branch.skeletonPoints[0])
     secondPartDirections = normalizeVectors(branch.skeletonPoints[-1] - branch.skeletonPoints[2:-1])
@@ -135,6 +125,4 @@ def splitAndGetEndPointIds(branch: Branch) -> List[np.intp]:
     splitAngles = angle(firstPartDirections, secondPartDirections)
     splitIdx = np.argmax(splitAngles) + 1
 
-    endPoints += [branch.skeletonIDs[splitIdx], branch.skeletonIDs[splitIdx+1]]
-
-    return endPoints
+    branch.addEndPoints([splitIdx, splitIdx + 1])

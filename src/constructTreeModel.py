@@ -1,4 +1,4 @@
-from itertools import chain, combinations
+from itertools import chain
 import networkx as nx
 import numpy as np
 import numpy.typing as npt
@@ -7,9 +7,9 @@ from typing import Any, Dict, List
 from scipy.spatial import KDTree
 
 from connectComponents import connectComponents
-from filterBranches import filterUncenteredBranches, filterByInfluence
+from filterBranches import pruneUncenteredBranches, filterByInfluence
 from objects.branch import Branch
-from utils.branchUtils import buildSubtreeFromGraph, condenseSkeletonPointIds, splitAndGetEndPointIds
+from utils.branchUtils import buildSubtreeFromGraph, splitAndAddEndPoints
 from utils.iteration import breadthFirstSearch
 
 
@@ -20,23 +20,13 @@ def constructTreeModel(tlsPoints: npt.NDArray[np.double],
     Branch.assignAllPoints(tlsPoints, branches, useTrimming=True)
     branches = filterBranches(branches, parameters["baseRadius"])
 
-    skeletonPointCount = condenseSkeletonPointIds(branches)
-    skeletonPoints = np.empty([skeletonPointCount, 3], dtype=np.double)
-    for b in branches:
-        skeletonPoints[b.skeletonIDs] = b.skeletonPoints
-
-    endPointIds = list(chain.from_iterable([splitAndGetEndPointIds(b) for b in branches]))
-    isEndPoint = np.zeros(len(skeletonPoints), dtype=bool)
-    isEndPoint[endPointIds] = True
-
-    componentStems = constructComponents(branches, skeletonPoints, endPointIds,
-                                         parameters["minDistanceThreshold"], heightAttribute)
+    componentStems = constructComponents(branches, parameters["minDistanceThreshold"], heightAttribute)
     rootComponentStem = min(componentStems, key=lambda componentStem: componentStem.skeletonPoints[0][heightAttribute])
 
     branches = list(chain.from_iterable([breadthFirstSearch(stem) for stem in componentStems]))
     unassignedPoints = Branch.assignAllPoints(tlsPoints, branches, useTrimming=True)
 
-    stem, prunedPoints = connectComponents(rootComponentStem, componentStems, unassignedPoints, isEndPoint,
+    stem, prunedPoints = connectComponents(rootComponentStem, componentStems, unassignedPoints,
                                            parameters["minDistanceThreshold"], parameters["maxDistanceThreshold"],
                                            np.deg2rad(parameters["minAngleThreshold"]),
                                            np.deg2rad(parameters["maxAngleThreshold"]),
@@ -46,7 +36,7 @@ def constructTreeModel(tlsPoints: npt.NDArray[np.double],
 
 def filterBranches(branches: List[Branch],
                    baseRadius: float) -> List[Branch]:
-    filterUncenteredBranches(branches)
+    pruneUncenteredBranches(branches)
     branches = [b for b in branches if not b.isRemoved]
     # TODO: Step 1.2.2 does not work in original implementation -> implement anyways or keep behavior?
 
@@ -60,13 +50,20 @@ def filterBranches(branches: List[Branch],
 
 
 def constructComponents(branches: List[Branch],
-                        skeletonPoints: npt.NDArray[np.double],
-                        endPointIds: List[int],
                         minDistanceThreshold: float,
                         heightAttribute: int = 2) -> List[Branch]:
     componentStems = []
 
-    skeletonGraph = createSkeletonGraph(branches, skeletonPoints, endPointIds, minDistanceThreshold)
+    skeletonPoints = np.concatenate([b.skeletonPoints for b in branches], axis=0)
+
+    isEndPoint = np.empty(len(skeletonPoints), dtype=bool)
+    offset = 0
+    for branch in branches:
+        pointCount = len(branch.skeletonPoints)
+        isEndPoint[offset:offset+pointCount] = branch.isEndPoint(np.arange(pointCount, dtype=int))
+        offset += pointCount
+
+    skeletonGraph = createSkeletonGraph(branches, skeletonPoints, isEndPoint, minDistanceThreshold)
     for c in nx.connected_components(skeletonGraph):
         if len(c) <= 1:
             raise ValueError("skeletonGraph should not contain single-point components")
@@ -75,7 +72,7 @@ def constructComponents(branches: List[Branch],
         rootNode = min(terminalNodes, key=lambda node: skeletonPoints[node][heightAttribute])
 
         componentSkeletonGraph = nx.dfs_tree(skeletonGraph, rootNode)
-        componentStem = buildSubtreeFromGraph(componentSkeletonGraph, skeletonPoints, rootNode)
+        componentStem = buildSubtreeFromGraph(componentSkeletonGraph, skeletonPoints, rootNode, isEndPoint=isEndPoint)
         componentStems.append(componentStem)
 
     return componentStems
@@ -83,16 +80,19 @@ def constructComponents(branches: List[Branch],
 
 def createSkeletonGraph(branches: List[Branch],
                         skeletonPoints: npt.NDArray[np.double],
-                        endPointIds: List[int],
+                        isEndPoint: npt.NDArray[np.bool],
                         minDistanceThreshold: float) -> nx.Graph:
     skeletonGraph = nx.Graph()
     skeletonGraph.add_nodes_from(range(len(skeletonPoints)))
 
+    offset = 0
     for b in branches:
-        pointPairs = [(b.skeletonIDs[i], b.skeletonIDs[i+1], np.linalg.norm(b.skeletonPoints[i+1] - b.skeletonPoints[i]))
+        pointPairs = [(offset + i, offset + i+1, np.linalg.norm(b.skeletonPoints[i+1] - b.skeletonPoints[i]))
                       for i in range(len(b.skeletonPoints) - 1)]
         skeletonGraph.add_weighted_edges_from(pointPairs, weight="distance")
+        offset += len(b.skeletonPoints)
 
+    endPointIds = np.flatnonzero(isEndPoint)
     endPointsLookUp = KDTree(skeletonPoints[endPointIds])
     endPointNeighbors = endPointsLookUp.query_ball_tree(endPointsLookUp, minDistanceThreshold)
     for index1, neighbors in enumerate(endPointNeighbors):
