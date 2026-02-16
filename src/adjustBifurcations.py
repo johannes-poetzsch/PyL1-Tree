@@ -8,9 +8,10 @@ import torch
 from itertools import combinations
 from typing import Dict, List, Optional, Tuple
 
-from .objects.branch import Branch
-from .utils.geometry import linesPointsDistances, normalizeVectors, angle
-from .utils.iteration import breadthFirstSearch
+from objects.branch import Branch
+from utils.branchUtils import reassignPoints
+from utils.geometry import linesPointsDistances, normalizeVectors, angle
+from utils.iteration import breadthFirstSearch
 #from src.utils.kernels import cum_min
 
 
@@ -32,7 +33,7 @@ def adjustBifurcations(stem, parameters):
             adjustmentIdx, adjustmentPoint, adjustmentBranch = determineAdjustment(associatedBranches, parent, tlsPoints, parameters)
 
             newParent = parent if adjustmentIdx is None else (
-                applyAdjustment(stem, associatedBranches, adjustmentIdx, adjustmentPoint, adjustmentBranch, tlsPoints))
+                applyAdjustment(stem, associatedBranches, adjustmentIdx, adjustmentPoint, adjustmentBranch))
 
             parent.unflip()
 
@@ -138,19 +139,19 @@ def applyAdjustment(stem: Branch,
                     associatedBranches: List[Branch],
                     adjustmentIdx: int,
                     adjustmentPoint: npt.NDArray[np.double], 
-                    adjustmentBranch: Branch,
-                    tlsPoints: npt.NDArray[cp.double]) -> Branch:
-    xp = cp.get_array_module(tlsPoints)
-
-    originalDistances = xp.min(xp.stack([b.getDistances(tlsPoints) for b in associatedBranches]), axis=0)
+                    adjustmentBranch: Branch
+                    ) -> Branch:
+    originalDistances = [b.getDistances(b.tlsPoints) for b in associatedBranches]
 
     adjustmentBranch.skeletonPoints = adjustmentBranch.skeletonPoints[adjustmentIdx:]
 
     for branch in associatedBranches:
-        branch.tlsPoints = np.empty([0,3], dtype=np.double)
         branch.skeletonPoints[0] = adjustmentPoint
         branch.updateSkeletonMeasurements()
         branch.unflip()
+
+    reassignPoints(list(breadthFirstSearch(stem)), changedBranches=associatedBranches,
+                   originalDistances=originalDistances, useTrimming=False)
 
     newParent = None
     if len(adjustmentBranch.skeletonPoints) <= 1:
@@ -158,10 +159,10 @@ def applyAdjustment(stem: Branch,
         newParent = adjustmentBranch.parent
         # branch can be removed
         del(associatedBranches[associatedBranches.index(adjustmentBranch)])
-        adjustmentBranch.remove()
-
-    Branch.assignLocalPoints(tlsPoints, branches=list(breadthFirstSearch(stem)),
-                             closeBranches=associatedBranches, originalDistances=originalDistances)
+        unassignedPoints = adjustmentBranch.remove()
+        Branch.assignLocalPoints(unassignedPoints, list(breadthFirstSearch(stem)),
+                                 closeBranches=associatedBranches,
+                                 useTrimming=False)
 
     return newParent
 
@@ -263,7 +264,7 @@ def getDistanceMetrics(targetPoints: npt.NDArray[np.double],
                                        axis=0)
     
     targetDistances = linesPointsDistances(targetPoints[:-1], targetPoints[1:], tlsPoints) # (T,N)
-    
+
     if xp is cp:
         distancesUntilTargets = cp.asarray(torch.as_tensor(targetDistances, device='cuda').cummin(dim=0).values)
         #distancesUntilTargets = cum_min(targetDistances, axis=0, reversed=False) # (T,N)

@@ -1,35 +1,29 @@
-import cupy as cp
 import numpy as np
 import numpy.typing as npt
 from scipy.spatial import KDTree
 
-from typing import Dict, List
+from typing import Dict
 
-from .objects.branch import Branch
-from .utils.branchUtils import generateSearchRanges, reassignAllPoints
-from .utils.geometry import getStripAngles, normalizeVectors, stripPointsDistances
-from .utils.iteration import breadthFirstSearch
-from .utils.pointMetrics import calculateDensity
+from objects.branch import Branch
+from src.filterBranches import limitToRange
+from utils.branchUtils import generateSearchRanges, reassignPoints
+from utils.geometry import getStripAngles, normalizeVectors, stripPointsDistances
+from utils.iteration import breadthFirstSearch
+from utils.pointMetrics import calculateDensity
 
 
-def smoothBranches(stem: Branch, 
+def smoothBranches(stem: Branch,
+                   tlsPoints: npt.NDArray[np.double],
                    unassignedTlsPoints: npt.NDArray[np.double],
                    parameters: Dict[str, any]) -> npt.NDArray[np.double]:
     branches = list(breadthFirstSearch(stem))
 
     removeBranchAnomalies(stem)
-    unassignedTlsPoints = reassignAllPoints(list(breadthFirstSearch(stem)), unassignedTlsPoints)
-    searchRanges = {}
-    generateSearchRanges(list(breadthFirstSearch(stem)), searchRanges,
-                         useTrimming=True, useMedianForStem=False)
+    unassignedTlsPoints = reassignPoints(list(breadthFirstSearch(stem)), unassignedTlsPoints)
+    searchRanges = generateSearchRanges(list(breadthFirstSearch(stem)), useMedianForStem=False, useTrimming=True)
     unassignedTlsPoints = np.append(unassignedTlsPoints, limitToRange(branches, searchRanges), axis=0)
 
-    allTlsPoints = [unassignedTlsPoints]
-    for branch in branches:
-        allTlsPoints.append(branch.tlsPoints)
-    allTlsPoints = np.concatenate(allTlsPoints, axis=0)
-
-    tlsKDTree = KDTree(allTlsPoints)
+    tlsKDTree = KDTree(tlsPoints)
     for branch in branches:
         densities = calculateDensity(branch.tlsPoints, tlsKDTree, parameters["initialSearchRange"]) # TODO check this
         smoothBranch(branch, densities, parameters["resolution"], np.deg2rad(parameters["smoothAngleThreshold"]))
@@ -64,19 +58,6 @@ def removeBranchAnomalies(stem):
             raise ValueError("Did not expect a terminal point to be anomalous.")
         if wasChanged:
             branch.updateSkeletonMeasurements()
-
-
-def limitToRange(branches: List[Branch], 
-                 searchRanges: Dict[Branch, np.double]) -> npt.NDArray[np.double]:
-    prunedTlsPoints = []
-
-    for branch in branches:
-        distances = branch.getDistances(branch.tlsPoints)
-        outOfRange = distances > searchRanges[branch]
-        prunedTlsPoints.append(branch.tlsPoints[outOfRange])
-        branch.tlsPoints = branch.tlsPoints[~outOfRange]
-
-    return np.concatenate(prunedTlsPoints, axis=0)
 
 
 def smoothBranch(branch: Branch, 
@@ -134,5 +115,5 @@ def smoothBranch(branch: Branch,
             newSkeleton = tempSkeleton
 
     if newSkeleton is not None:
-        branch.skeletonPoints = newSkeleton # TODO: remove skeletonIDs?
+        branch.skeletonPoints = newSkeleton
         branch.updateSkeletonMeasurements()

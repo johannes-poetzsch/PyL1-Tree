@@ -46,9 +46,9 @@ def import_tree_model(eng: m.MatlabEngine) -> Tuple[List[Branch], npt.NDArray[np
         treeModel.append(Branch(branchIndex, skeletonIDs, skeletonPoints, tlsPoints[tlsBranchIDs == branchIndex]))
 
     for [branch1, branch2] in combinations(treeModel, 2):
-        if branch1.skeletonIDs[0] == branch2.skeletonIDs[-1]:
+        if branch1.toberemoved[0] == branch2.toberemoved[-1]:
             branch1.setParent(branch2)
-        elif branch2.skeletonIDs[0] == branch1.skeletonIDs[-1]:
+        elif branch2.toberemoved[0] == branch1.toberemoved[-1]:
             branch2.setParent(branch1)
 
     return treeModel, tlsPoints[tlsBranchIDs == -1]

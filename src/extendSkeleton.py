@@ -8,7 +8,7 @@ from sklearn.cluster import dbscan, k_means
 from typing import Dict, List, Optional
 
 from .objects.branch import Branch
-from .utils.branchUtils import buildSubtreeFromGraph
+from .utils.branchUtils import buildSubtreeFromGraph, reassignPoints
 from .utils.geometry import angle, normalizeVectors
 from .utils.iteration import breadthFirstSearch
 
@@ -51,14 +51,9 @@ def extendSkeleton(stem: Branch,
                                                         closeBranches=list(breadthFirstSearch(root)),
                                                         useTrimming=True))
 
-    for branch in branches:
-        tlsPoints = branch.tlsPoints
-        branch.tlsPoints = np.empty([0,3], dtype=np.double)
-        prunedTlsPoints.append(Branch.assignLocalPoints(tlsPoints,
-                                                        branches,
-                                                        closeBranches=[branch],
-                                                        useTrimming=True))
+    prunedTlsPoints.append(reassignPoints(branches, useTrimming=True))
 
+    prunedTlsPoints = np.concatenate(prunedTlsPoints, axis=0)
     return prunedTlsPoints
 
 

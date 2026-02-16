@@ -2,9 +2,9 @@ from __future__ import annotations
 import cupy as cp
 import numpy as np
 import numpy.typing as npt
-from typing import Iterable, List, Optional, Set, Tuple
+from typing import Iterable, List, Optional, Tuple
 
-from ..utils.branchUtils import findCloseBranches
+from ..utils.branchUtils import findCloseBranches, reassignPoints
 from ..utils.geometry import getStripAngles, linesPointsDistances, stripPointsDistances
 
 
@@ -26,6 +26,13 @@ class Branch:
         self.setParent(parent)
         self.updateSkeletonMeasurements()
         self.isRemoved = False
+
+
+    def getCentrifugalOrder(self) -> int:
+        if self.isStem():
+            return 1
+        else:
+            return self.parent.getCentrifugalOrder() + 1
 
 
     def addEndPoints(self, endPointIndices: Iterable[int]):
@@ -68,7 +75,7 @@ class Branch:
 
 
     # returns branch that ends at splitIdx.
-    def split(self, splitIdx: int) -> Branch:
+    def split(self, splitIdx: int | np.intp) -> Branch:
         if splitIdx <= 0:
             return self.parent
         if splitIdx >= len(self.skeletonPoints) - 1:
@@ -82,9 +89,7 @@ class Branch:
         splitEnd.setParent(self)
         self.skeletonPoints = self.skeletonPoints[:splitIdx+1]
         if len(self.tlsPoints) > 0:
-            tlsPoints = self.tlsPoints
-            self.tlsPoints = np.empty([0,3], dtype=np.double)
-            Branch.assignLocalPoints(tlsPoints, [self, splitEnd])
+            reassignPoints([self, splitEnd], changedBranches=[self])
 
         if self.endPointIndices is not None:
             endPointIndices = self.endPointIndices

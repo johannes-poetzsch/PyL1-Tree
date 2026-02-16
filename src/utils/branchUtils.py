@@ -1,11 +1,11 @@
 import cupy as cp
+from itertools import repeat
 import networkx as nx
 import numpy as np
 import numpy.typing as npt
 from scipy.spatial import KDTree
 from typing import List, Optional
 
-from .geometry import angle, normalizeVectors
 from ..objects.branch import Branch
 
 
@@ -92,37 +92,24 @@ def findCloseBranches(points: npt.NDArray[np.double],
     return closeBranchIndices
 
 
-def reassignAllPoints(branches: List[Branch],
-                      unassignedTlsPoints: npt.NDArray[np.double],
-                      useTrimming: bool = True
-                      ) -> npt.NDArray[np.double]:
+def reassignPoints(branches: List[Branch],
+                   unassignedTlsPoints: Optional[npt.NDArray[np.double]] = None,
+                   changedBranches: Optional[List[Branch]] = None,
+                   originalDistances: Optional[List[npt.NDArray[np.double]]] = None,
+                   useTrimming: bool = True
+                   ) -> npt.NDArray[np.double]:
+    changedBranches = branches if changedBranches is None else changedBranches
+    originalDistances = repeat(None) if originalDistances is None else originalDistances
     prunedTlsPoints = []
 
-    for branch in branches:
+    for branch, od in zip(changedBranches, originalDistances):
         tlsPoints = branch.tlsPoints
         branch.tlsPoints = np.empty([0,3], dtype=np.double)
         prunedTlsPoints.append(Branch.assignLocalPoints(tlsPoints, branches, closeBranches=[branch],
+                                                        originalDistances=od,
                                                         useTrimming=useTrimming))
 
-    prunedTlsPoints.append(Branch.assignAllPoints(unassignedTlsPoints, branches, useTrimming=True))
+    if unassignedTlsPoints is not None:
+        prunedTlsPoints.append(Branch.assignAllPoints(unassignedTlsPoints, branches, useTrimming=True))
 
     return np.concatenate(prunedTlsPoints, axis=0)
-
-
-def splitAndAddEndPoints(branch: Branch):
-    if len(branch.skeletonPoints) < 4:
-        return
-
-    startDirection = normalizeVectors(branch.skeletonPoints[1] - branch.skeletonPoints[0])
-    endDirection = normalizeVectors(branch.skeletonPoints[-1] - branch.skeletonPoints[-2])
-
-    if angle(startDirection, endDirection) < np.pi / 2: # acute angle are fine
-        return
-
-    firstPartDirections = normalizeVectors(branch.skeletonPoints[1:-2] - branch.skeletonPoints[0])
-    secondPartDirections = normalizeVectors(branch.skeletonPoints[-1] - branch.skeletonPoints[2:-1])
-
-    splitAngles = angle(firstPartDirections, secondPartDirections)
-    splitIdx = np.argmax(splitAngles) + 1
-
-    branch.addEndPoints([splitIdx, splitIdx + 1])

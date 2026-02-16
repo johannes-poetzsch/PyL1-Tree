@@ -1,16 +1,17 @@
 import numpy as np
 import numpy.typing as npt
-from typing import List, Optional
+from itertools import repeat
+from typing import Iterable, List, Optional
 
 from objects.branch import Branch
 from utils.branchUtils import generateSearchRanges
-from utils.geometry import angle, linesPointsDistances, normalizeVectors
+from utils.geometry import angle, distanceAlongDirection, movingTTest, normalizeVectors, stripPointsDistances
 from utils.iteration import breadthFirstSearch
 
 
-def filterBranches(stem: Branch,
-                   parameters: dict,
-                   expandBranches = True) -> Optional[npt.NDArray[np.double]]:
+def filterTreeBranches(stem: Branch,
+                       parameters: dict,
+                       pruneNewLeaves: bool = False) -> Optional[npt.NDArray[np.double]]:
     branches = list(breadthFirstSearch(stem))
     trimmedPoints1 = filterByLength(branches, parameters["branchSizeThreshold"], parameters["resolution"])
 
@@ -19,7 +20,10 @@ def filterBranches(stem: Branch,
 
     trimmedPoints2 = filterByInfluence(branches, generateSearchRanges(branches, useMedianForStem=True))
 
-    if expandBranches:
+    if pruneNewLeaves:
+        branches = list(breadthFirstSearch(stem))
+        prunedBranches.extend(pruneLeafEnds(branches))
+    else:
         for branch in breadthFirstSearch(stem):
             if len(branch.children) == 1:
                 branch.expand()
@@ -75,6 +79,28 @@ def filterByInfluence(branches: List[Branch],
     return np.concatenate(trimmedPoints, axis=0)
 
 
+def limitToRange(branches: Iterable[Branch],
+                 pointRanges: float | Iterable[float],
+                 doubleBaseRange: bool = False,
+                 baseLevelNumber: int = 3) -> npt.NDArray[np.double]:
+    ranges = pointRanges if isinstance(pointRanges, Iterable) else repeat(pointRanges)
+    prunedPoints = []
+
+    isBaseBranch = True
+    for branch, pointRange in zip(branches, ranges):
+        if doubleBaseRange and isBaseBranch:
+            isBaseBranch = branch.getCentrifugalOrder() <= baseLevelNumber
+
+        pointRange = 2 * pointRange if doubleBaseRange and isBaseBranch else pointRange
+        distances = branch.getDistances(branch.tlsPoints)
+
+        isInRange = distances <= pointRange
+        prunedPoints.append(branch.tlsPoints[~isInRange])
+        branch.tlsPoints = branch.tlsPoints[isInRange]
+
+    return np.concatenate(prunedPoints, axis=0)
+
+
 def pruneByAngle(branches: List[Branch],
                  maxAngleThreshold: float) -> List[Branch]:
     prunedBranches = []
@@ -100,6 +126,79 @@ def pruneByAngle(branches: List[Branch],
     return prunedBranches
 
 
+def pruneLeafEnds(branches: List[Branch]) -> List[Branch]:
+    prunedBranches = []
+    for branch in branches:
+        if len(branch.children) != 1:
+            continue
+        child = next(iter(branch.children))
+        if (not child.isLeaf() or
+                len(branch.skeletonPoints) < 3 or
+                len(child.skeletonPoints) < 3 or
+                not branch.isEndPoint(-2)):
+            branch.expand()
+            continue
+
+        preEndDirection = normalizeVectors(branch.skeletonPoints[-2] - branch.skeletonPoints[-3])
+        endDirection = normalizeVectors(branch.skeletonPoints[-1] - branch.skeletonPoints[-2])
+        startDirection = normalizeVectors(child.skeletonPoints[1] - child.skeletonPoints[0])
+
+        angleBeforeEnd = np.rad2deg(angle(endDirection, preEndDirection))
+        angleAtEnd = np.rad2deg(angle(startDirection, endDirection))
+
+        pruneIdx = len(branch.skeletonPoints) - 2
+        branch.expand()
+
+        if not angleBeforeEnd + angleAtEnd > 150:
+            continue
+        else:
+            branch.split(pruneIdx)
+            child = next(iter(branch.children))
+            child.remove()
+            prunedBranches.append(child)
+
+    return prunedBranches
+
+
+def pruneThickeningLeaves(branches: List[Branch], branchSizeThreshold: int) -> npt.NDArray[np.double]:
+    prunedPoints = []
+
+    for leaf in branches:
+        if not leaf.isLeaf() or len(leaf.skeletonPoints) <= branchSizeThreshold:
+            continue
+        _, _, closestPointIndices = stripPointsDistances(leaf.skeletonPoints, leaf.tlsPoints, returnPedalInfo=True)
+
+        order = np.argsort(closestPointIndices)
+        tlsPoints = leaf.tlsPoints[order]
+        closestPointIndices = closestPointIndices[order]
+
+        skeletonIndices, indices, counts = np.unique(closestPointIndices, return_index=True, return_counts=True)
+
+        segmentRadii = np.full(len(leaf.skeletonPoints), np.nan, dtype=np.double)
+        for skeletonIdx, idx, count in (skeletonIndices, indices, counts):
+            skeletonPoint = leaf.skeletonPoints[idx]
+            segmentPoints = tlsPoints[idx:idx + count]
+            if skeletonIdx == len(leaf.skeletonPoints) - 1:
+                segmentDirection = normalizeVectors(segmentPoints[-1] - segmentPoints[-2])
+            else:
+                segmentDirection = normalizeVectors(segmentPoints[skeletonIdx+1] - segmentPoints[skeletonIdx])
+
+            distances = np.linalg.norm(segmentPoints - skeletonPoint, axis=1)
+            baseDistances = np.abs(distanceAlongDirection(skeletonPoint, segmentPoints, segmentDirection))
+            pedalDistances = np.sqrt(distances ** 2 - baseDistances ** 2)
+            segmentRadii[skeletonIdx] = np.real(np.mean(pedalDistances))
+
+        breakIdx = movingTTest(segmentRadii)
+        if breakIdx is None or breakIdx < branchSizeThreshold:
+            continue
+
+        leaf = leaf.split(breakIdx)
+        prunedBranchEnd = next(iter(leaf.children))
+        prunedPoints.append(prunedBranchEnd.remove())
+
+    return np.concatenate(prunedPoints, axis=0)
+
+
 def pruneUncenteredBranches(branches: List[Branch]) -> List[Branch]:
     minDistance = 0.000001
     prunedBranches: List[Branch] = []
@@ -107,10 +206,8 @@ def pruneUncenteredBranches(branches: List[Branch]) -> List[Branch]:
     for branch in branches:
         if branch.isRemoved:
             continue
-        distances, pedalPoints = linesPointsDistances(branch.skeletonPoints[:-1],
-                                                      branch.skeletonPoints[1:],
-                                                      branch.tlsPoints,
-                                                      returnPedalPoints=True)
+        distances, pedalPoints, _ = stripPointsDistances(branch.skeletonPoints[:-1], branch.tlsPoints,
+                                                         returnPedalInfo=True)
 
         tlsPoints = branch.tlsPoints[distances > minDistance]
         pedalPoints = pedalPoints[distances > minDistance]

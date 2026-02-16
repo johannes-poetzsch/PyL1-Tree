@@ -13,6 +13,7 @@ def generateSeeds(tlsPoints: npt.NDArray[np.double], # must be sorted by height 
     basePointIndex = len(tlsPoints)
     tlsPoints = np.append(tlsPoints, basePoint[np.newaxis], axis=0)
 
+    parameters["basePoint"] = basePoint
     if parameters["baseRadius"] is None: parameters["baseRadius"] = baseRadius
     if parameters["initialSearchRange"] is None: parameters["initialSearchRange"] = baseRadius * 0.1
     if parameters["searchRange"] is None: parameters["searchRange"] = baseRadius * 0.1

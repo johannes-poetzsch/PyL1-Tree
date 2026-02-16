@@ -1,6 +1,7 @@
 import cupy as cp
 import numpy as np
 import numpy.typing as npt
+from scipy.stats import ttest_ind
 
 from typing import Optional, Tuple
 
@@ -11,6 +12,23 @@ def distanceAlongDirection(startPoints: npt.NDArray[np.double],
     return np.vecdot(endPoints - startPoints, direction)
 
 
+def movingTTest(sequence: npt.NDArray[np.double]) -> Optional[int]:
+    windowSize = max(5, np.floor(len(sequence) / 10))
+
+    for startIdx, doubleWindow in enumerate(np.lib.stride_tricks.sliding_window_view(sequence, 2*windowSize)):
+        firstWindow = doubleWindow[:windowSize]
+        firstWindow = firstWindow[~np.isnan(firstWindow)]
+        secondWindow = doubleWindow[windowSize:]
+        secondWindow = secondWindow[~np.isnan(secondWindow)]
+        _, pValue = ttest_ind(firstWindow, secondWindow, alternative='less')
+
+        if pValue < 0.01: # TODO: try higher Values
+            breakIdx = startIdx + windowSize - 1 # break idx is last index of first window
+            return breakIdx
+
+    return None
+
+
 def normalizeVectors(vectors: npt.NDArray):
     xp = cp.get_array_module(vectors)
     return vectors / xp.expand_dims(xp.linalg.norm(vectors, axis=-1), axis=-1)
@@ -19,7 +37,7 @@ def normalizeVectors(vectors: npt.NDArray):
 def linesPointsDistances(lineStartPoints: npt.NDArray, # (L,D)
                          lineEndPoints: npt.NDArray, # (L,D) or (D)
                          points: npt.NDArray, # (N,D)
-                         returnPedalPoints: bool = False) -> npt.NDArray | Tuple[npt.NDArray, npt.NDArray]:
+                         ) -> npt.NDArray | Tuple[npt.NDArray, npt.NDArray]:
     xp = cp.get_array_module(lineStartPoints, lineEndPoints, points)
     lineVectors = lineStartPoints - lineEndPoints # (L,D)
 
@@ -28,22 +46,23 @@ def linesPointsDistances(lineStartPoints: npt.NDArray, # (L,D)
     tMatrix = xp.einsum('LND,LD->LN', pointsToLineStartPoints, lineVectors) / xp.einsum('LD,LD->L', lineVectors, lineVectors)[:,xp.newaxis] # (L,N)
     del pointsToLineStartPoints
     xp.clip(tMatrix, 0, 1, out=tMatrix)
-    closestPointsOnLines = lineStartPoints[:,xp.newaxis] - tMatrix[:,:,xp.newaxis] * lineVectors[:,xp.newaxis] # (L,N,D)
+    pedalPoints = lineStartPoints[:,xp.newaxis] - tMatrix[:,:,xp.newaxis] * lineVectors[:,xp.newaxis] # (L,N,D)
     del tMatrix
-    distances = xp.linalg.norm(closestPointsOnLines - points, axis=-1) # (L,N)
+    distances = xp.linalg.norm(pedalPoints - points, axis=-1) # (L,N)
 
-    if returnPedalPoints:
-        return distances, closestPointsOnLines
-    else:
-        return distances
+    return distances
 
 
 def stripPointsDistances(strip: npt.NDArray, # (L+1,D)
                          points: npt.NDArray, # (N,D)
                          trimStart = False,
                          trimEnd = False,
-                         returnTrimming = False
-                         ) -> (npt.NDArray[np.double] | Tuple[npt.NDArray[np.double], npt.NDArray[np.bool]]):
+                         returnTrimming = False,
+                         returnPedalInfo = False
+                         ) -> (Tuple[npt.NDArray[np.double], npt.NDArray[np.double], npt.NDArray[np.intp], npt.NDArray[np.bool]] |
+                               Tuple[npt.NDArray[np.double], npt.NDArray[np.double], npt.NDArray[np.intp]] |
+                               Tuple[npt.NDArray[np.double], npt.NDArray[np.bool]] |
+                               npt.NDArray[np.double]):
     xp = cp.get_array_module(strip, points)
     segmentStarts = strip[:-1]
     segmentEnds = strip[1:]
@@ -54,13 +73,13 @@ def stripPointsDistances(strip: npt.NDArray, # (L+1,D)
     tMatrix = xp.einsum('LND,LD->LN', pointsToSegmentStarts, segmentVectors) / xp.einsum('LD,LD->L', segmentVectors, segmentVectors)[:,xp.newaxis] # (L,N)
     del pointsToSegmentStarts
     xp.clip(tMatrix, 0, 1, out=tMatrix)
-    closestSegmentPoints = segmentStarts[:,xp.newaxis] - tMatrix[:,:,xp.newaxis] * segmentVectors[:,xp.newaxis] # (L,N,D)
+    pedalPoints = segmentStarts[:,xp.newaxis] - tMatrix[:,:,xp.newaxis] * segmentVectors[:,xp.newaxis] # (L,N,D)
 
-    segmentDistances: npt.NDArray = xp.linalg.norm(closestSegmentPoints - points, axis=-1) # (L,N)
-    distances: npt.NDArray[np.double] = segmentDistances.min(axis=0)
+    segmentDistances: npt.NDArray = xp.linalg.norm(pedalPoints - points, axis=-1) # (L,N)
+    closestSegment = segmentDistances.argmin(axis=0) # (N)
+    distances: npt.NDArray[np.double] = segmentDistances[closestSegment]
 
     trimmed = np.zeros_like(distances, dtype=bool)
-    closestSegment = segmentDistances.argmin(axis=0) # (N)
 
     if trimStart:
         trimmed |= (closestSegment == 0) & (tMatrix[0] == 0)
@@ -68,11 +87,21 @@ def stripPointsDistances(strip: npt.NDArray, # (L+1,D)
         endIdx = len(segmentVectors) - 1
         trimmed |= (closestSegment == endIdx) & (tMatrix[endIdx] == 1)
 
-    if returnTrimming:
-        return distances, trimmed
+    untrimmed = ~trimmed
+    if returnPedalInfo:
+        pedalPoints = pedalPoints[closestSegment]
+        atStartPoint = tMatrix[closestSegment] < 0.5
+        closestPointIndices = np.where(atStartPoint, closestSegment, closestSegment+1)
+        if returnTrimming:
+            return distances, pedalPoints, closestPointIndices, trimmed
+        else:
+            return distances[untrimmed], pedalPoints[untrimmed], closestPointIndices[untrimmed]
     else:
-        return distances[xp.logical_not(trimmed)]
-        
+        if returnTrimming:
+            return distances, trimmed
+        else:
+            return distances[untrimmed]
+
 
 def getStripAngles(strip: npt.NDArray[np.double]) -> Optional[npt.NDArray[np.double]]:
     if len(strip) < 3:

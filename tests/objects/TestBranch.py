@@ -11,7 +11,7 @@ from src.objects.branch import Branch
 @pytest.fixture(scope='module')
 def branch() -> Branch:
     return Branch(id=0,
-                  skeletonIDs=np.arange(3, dtype=np.intp),
+                  toberemoved=np.arange(3, dtype=np.intp),
                   skeletonPoints=np.arange(9, dtype=np.double).reshape((3, 3)),
                   tlsPoints=np.arange(27, dtype=np.double).reshape((9, 3)))
 
@@ -32,25 +32,25 @@ def test_to_cpu(branch):
 class TestOrientToBifurcation:
     def test_flipsToOtherEnd(self, branch):
         test_branch = copy.deepcopy(branch)
-        test_branch.orientToBifurcation(test_branch.skeletonIDs[-1])
+        test_branch.orientToBifurcation(test_branch.toberemoved[-1])
 
         assert test_branch.isFlipped
-        assert_array_equal(test_branch.skeletonIDs, branch.skeletonIDs[::-1])
+        assert_array_equal(test_branch.toberemoved, branch.toberemoved[::-1])
         assert_array_equal(test_branch.skeletonPoints, branch.skeletonPoints[::-1])
 
 
     def test_doesNotFlipToCurrentEnd(self, branch):
         test_branch = copy.deepcopy(branch)
-        test_branch.orientToBifurcation(test_branch.skeletonIDs[0])
+        test_branch.orientToBifurcation(test_branch.toberemoved[0])
 
         assert test_branch.isFlipped == branch.isFlipped
-        assert_array_equal(test_branch.skeletonIDs, branch.skeletonIDs)
+        assert_array_equal(test_branch.toberemoved, branch.toberemoved)
         assert_array_equal(test_branch.skeletonPoints, branch.skeletonPoints)
 
 
     def test_otherIdRaisesError(self, branch):
         with pytest.raises(ValueError):
-            branch.orientToBifurcation(branch.skeletonIDs[1])
+            branch.orientToBifurcation(branch.toberemoved[1])
 
 
 def test_interpolation(branch):
