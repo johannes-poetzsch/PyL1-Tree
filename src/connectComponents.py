@@ -118,8 +118,9 @@ def connectComponents(rootComponentStem: Branch,
             del(unconnectedComponents[unconnectedComponents.index(connectionComponent)])
             currentComponent, connectionBranch = connectionComponent.connect(resolution)
 
-            for component in unconnectedComponents: # TODO: limit
-                component.updatePossibleConnections(connectionBranch, minAngleThreshold, minDistanceThreshold)
+            for component in unconnectedComponents:
+                if component.getBoundingBoxDistance(currentComponent) == 0:
+                    component.updatePossibleConnections(connectionBranch, minAngleThreshold, minDistanceThreshold)
 
             maxDistanceThreshold = originalMaxDistanceThreshold
             maxCheckedDistance = 0.0

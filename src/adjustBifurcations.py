@@ -272,23 +272,21 @@ def getDistanceMetrics(targetPoints: npt.NDArray[np.double],
         distancesUntilTargets = np.minimum.accumulate(targetDistances, axis=0)
     distancesToRemovedSegments = xp.minimum(distancesUntilTargets[isCredible], 
                                             xp.min(xp.stack([firstSegmentDistances[b] for b in otherBranches]), axis=0))
-    del(distancesUntilTargets)
+    del distancesUntilTargets
 
     if xp is cp:
         distancesFromTargets = cp.flipud(cp.asarray(torch.as_tensor(targetDistances, device='cuda').flipud().cummin(dim=0).values))
         #distancesFromTargets = cum_min(targetDistances, axis=0, reversed=True) # (T,N)
     else:
         distancesFromTargets = np.flipud(np.minimum.accumulate(np.flipud(targetDistances)))
-    del(targetDistances)
+    del targetDistances
     distancesFromTargets = xp.roll(distancesFromTargets, -1, axis=0)
     distancesFromTargets[-1] = xp.inf
 
-    # TODO: compare stack+min to minimum.reduce (adjust restBranchDistances shape in edge case)
     distancesToUnaffectedSegments = xp.minimum(distancesFromTargets[isCredible],
-                                               xp.min(xp.stack([restBranchDistances[b] for b in otherBranches]), axis=0))
-    del(distancesFromTargets)
+                                               xp.minimum.reduce([restBranchDistances[b] for b in otherBranches], axis=0))
+    del distancesFromTargets
 
-    # TODO: consider adding maxEqualityDistance to avoid floating point issues
     isAtBifurcation = xp.logical_or(distancesToRemovedSegments < distancesToUnaffectedSegments,
                                     distancesToNewBifurcation < distancesToUnaffectedSegments)
 

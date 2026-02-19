@@ -31,9 +31,7 @@ def buildSubtreeFromGraph(skeletonGraph: nx.DiGraph,
         else:
             break
 
-    branch = Branch(id=-1,
-                    skeletonPoints=skeletonPoints[pointIndices],
-                    parent=parent)
+    branch = Branch(skeletonPoints[pointIndices], parent=parent)
 
     if isEndPoint is not None:
         endPointIndices = pointIndices[isEndPoint[pointIndices]]

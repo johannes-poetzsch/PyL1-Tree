@@ -68,7 +68,7 @@ def smoothBranch(branch: Branch,
                                      trimStart=True, 
                                      trimEnd=True,
                                      returnTrimming=True)
-    
+
     tlsPoints = branch.tlsPoints[~trimmed]
     if len(tlsPoints) < 10:
         return
@@ -82,7 +82,7 @@ def smoothBranch(branch: Branch,
     direction = normalizeVectors(endPoint - startPoint)
 
     distanceToStart: npt.NDArray[np.double] = np.vecdot(tlsPoints - startPoint, direction)
-    order = distanceToStart.argsort() # TODO: does actually ordering improve caching?
+    order = distanceToStart.argsort()
     
     maxSampleNum = int(min(np.floor(branch.length / resolution), len(tlsPoints) / 2))
     newSkeleton = None

@@ -1,109 +1,112 @@
-from itertools import chain
-import networkx as nx
 import numpy as np
 import numpy.typing as npt
-from typing import Any, Dict, List
+from typing import Dict, Literal, Tuple
 
-from scipy.spatial import KDTree
-
-from connectComponents import connectComponents
-from filterBranches import pruneUncenteredBranches, filterByInfluence
-from objects.branch import Branch
-from utils.branchUtils import buildSubtreeFromGraph, splitAndAddEndPoints
-from utils.iteration import breadthFirstSearch
-
-
-def constructTreeModel(tlsPoints: npt.NDArray[np.double],
-                       branches: List[Branch],
-                       parameters: Dict[str, Any],
-                       heightAttribute: int = 2):
-    Branch.assignAllPoints(tlsPoints, branches, useTrimming=True)
-    branches = filterBranches(branches, parameters["baseRadius"])
-
-    componentStems = constructComponents(branches, parameters["minDistanceThreshold"], heightAttribute)
-    rootComponentStem = min(componentStems, key=lambda componentStem: componentStem.skeletonPoints[0][heightAttribute])
-
-    branches = list(chain.from_iterable([breadthFirstSearch(stem) for stem in componentStems]))
-    unassignedPoints = Branch.assignAllPoints(tlsPoints, branches, useTrimming=True)
-
-    stem, prunedPoints = connectComponents(rootComponentStem, componentStems, unassignedPoints,
-                                           parameters["minDistanceThreshold"], parameters["maxDistanceThreshold"],
-                                           np.deg2rad(parameters["minAngleThreshold"]),
-                                           np.deg2rad(parameters["maxAngleThreshold"]),
-                                           parameters["resolution"], parameters["windowSize"],
-                                           parameters["densityFactor"])
+from src.filterBranches import limitToRange
+from src.objects.branch import Branch
+from src.smoothBranches import removeBranchAnomalies
+from src.utils.branchUtils import generateSearchRanges, reassignPoints
+#from src.utils.geometry import angle, normalizeVectors
+from src.utils.iteration import breadthFirstSearch
 
 
-def filterBranches(branches: List[Branch],
-                   baseRadius: float) -> List[Branch]:
-    pruneUncenteredBranches(branches)
-    branches = [b for b in branches if not b.isRemoved]
-    # TODO: Step 1.2.2 does not work in original implementation -> implement anyways or keep behavior?
+def constructTreeModel(stem: Branch) -> Tuple[Dict[Branch, float], Dict[Branch, bool]]:
+    branches = list(breadthFirstSearch(stem))
 
-    branches.sort(key=lambda b: b.length, reverse=True)
+    removeBranchAnomalies(stem)
+    reassignPoints(list(breadthFirstSearch(stem)))
 
-    branchTlsDistances = [b.getDistances(b.tlsPoints) for b in branches]
-    searchRanges = np.array([np.quantile(d, 0.9, method="hazen") for d in branchTlsDistances])
-    filterByInfluence(branches, searchRanges=np.minimum(searchRanges, baseRadius))
-
-    return [b for b in branches if not b.isRemoved]
+    searchRanges = generateSearchRanges(list(breadthFirstSearch(stem)), useMedianForStem=False, useTrimming=True)
+    limitToRange(branches, searchRanges)
+    branchRadii, radiusIsCredible = calculateBranchRadiiCentrifugal(stem)
+    return branchRadii, radiusIsCredible
 
 
-def constructComponents(branches: List[Branch],
-                        minDistanceThreshold: float,
-                        heightAttribute: int = 2) -> List[Branch]:
-    componentStems = []
+def calculateBranchRadiiCentrifugal(stem: Branch) -> Tuple[Dict[Branch, float], Dict[Branch, bool]]:
+    branchRadii: Dict[Branch, float] = {}
+    radiusIsCredible: Dict[Branch, bool] = {}
 
-    skeletonPoints = np.concatenate([b.skeletonPoints for b in branches], axis=0)
+    for branch in breadthFirstSearch(stem):
+        if len(branch.tlsPoints) == 0:
+            branchRadii[branch] = np.nan
+            continue
 
-    isEndPoint = np.empty(len(skeletonPoints), dtype=bool)
-    offset = 0
-    for branch in branches:
-        pointCount = len(branch.skeletonPoints)
-        isEndPoint[offset:offset+pointCount] = branch.isEndPoint(np.arange(pointCount, dtype=int))
-        offset += pointCount
+        distances, trimmed = branch.getDistances(branch.tlsPoints, trimStart=True, trimEnd=True, returnTrimming=True)
 
-    skeletonGraph = createSkeletonGraph(branches, skeletonPoints, isEndPoint, minDistanceThreshold)
-    for c in nx.connected_components(skeletonGraph):
-        if len(c) <= 1:
-            raise ValueError("skeletonGraph should not contain single-point components")
-        # find the terminal node with the lowest height
-        terminalNodes = [node for node in c if skeletonGraph.degree(node) == 1]
-        rootNode = min(terminalNodes, key=lambda node: skeletonPoints[node][heightAttribute])
+        distances = distances[~trimmed]
+        tlsPoints = branch.tlsPoints[~trimmed]
 
-        componentSkeletonGraph = nx.dfs_tree(skeletonGraph, rootNode)
-        componentStem = buildSubtreeFromGraph(componentSkeletonGraph, skeletonPoints, rootNode, isEndPoint=isEndPoint)
-        componentStems.append(componentStem)
+        if branch.isStem() or np.isnan(branchRadii[branch.parent]):
+            branchRadii[branch] = distances.mean()
+            continue
 
-    return componentStems
+        neighborBranches = [branch.parent] + [c for c in branch.parent.children if c is not branch]
+        parentRadius = branchRadii[branch.parent]
+
+        _, neighborDistances = Branch.findClosestBranches(tlsPoints, neighborBranches, useTrimming=False)
+        distances = distances[neighborDistances < 2 * parentRadius]
+
+        branchRadii[branch] = distances.mean() if len(distances) > 0 else np.nan
+
+    for branch in breadthFirstSearch(stem):
+        if branch.isStem():
+            radiusIsCredible[branch] = True
+            continue
+
+        branchRadius = branchRadii[branch]
+        parentRadius = branchRadii[branch.parent]
+        if not np.isnan(branchRadius) and branchRadius <= parentRadius:
+            radiusIsCredible[branch] = True
+            continue
+
+        if branch.isLeaf():
+            branchRadii[branch] = parentRadius
+            radiusIsCredible[branch] = False
+        else:
+            maxChildRadius = max([branchRadii[c] for c in branch.children])
+            if maxChildRadius > parentRadius:
+                branchRadii[branch] = parentRadius
+                radiusIsCredible[branch] = False
+            else:
+                branchRadii[branch] = (maxChildRadius + parentRadius) / 2
+                radiusIsCredible[branch] = True
+
+    return branchRadii, radiusIsCredible
 
 
-def createSkeletonGraph(branches: List[Branch],
-                        skeletonPoints: npt.NDArray[np.double],
-                        isEndPoint: npt.NDArray[np.bool],
-                        minDistanceThreshold: float) -> nx.Graph:
-    skeletonGraph = nx.Graph()
-    skeletonGraph.add_nodes_from(range(len(skeletonPoints)))
+#def calculateBranchRadiiGaaliche(stem: Branch, initialRadii: Dict[Branch, float]) -> Dict[Branch, float]:
+#    branchRadii = {}
+#    continuations = {}
+#
+#    for branch in breadthFirstSearch(stem):
+#        if not branch.isLeaf():
+#            continuations[branch] = getContinuation(branch, initialRadii)
 
-    offset = 0
-    for b in branches:
-        pointPairs = [(offset + i, offset + i+1, np.linalg.norm(b.skeletonPoints[i+1] - b.skeletonPoints[i]))
-                      for i in range(len(b.skeletonPoints) - 1)]
-        skeletonGraph.add_weighted_edges_from(pointPairs, weight="distance")
-        offset += len(b.skeletonPoints)
 
-    endPointIds = np.flatnonzero(isEndPoint)
-    endPointsLookUp = KDTree(skeletonPoints[endPointIds])
-    endPointNeighbors = endPointsLookUp.query_ball_tree(endPointsLookUp, minDistanceThreshold)
-    for index1, neighbors in enumerate(endPointNeighbors):
-        id1 = endPointIds[index1]
-        for index2 in neighbors:
-            id2 = endPointIds[index2]
-            if id1 >= id2:
-                continue
-            distance = np.linalg.norm(skeletonPoints[id1] - skeletonPoints[id2])
-            skeletonGraph.add_edge(id1, id2, distance=distance)
 
-    skeletonGraph = nx.minimum_spanning_tree(skeletonGraph, weight="distance")
 
-    return skeletonGraph
+
+
+#def getContinuation(branch: Branch, branchRadii: Dict[Branch, float]) -> Branch:
+#    continuationBranch = None
+#    branchDirection = normalizeVectors(branch.skeletonPoints[-1] - branch.skeletonPoints[0])
+#
+#    childData = []
+#    for child in branch.children:
+#        siblingDirection = normalizeVectors(child.skeletonPoints[-1] - child.skeletonPoints[0])
+#        siblingAngle = angle(siblingDirection, branchDirection)
+#        childData.append({"branch": child,
+#                          "radius": branchRadii[child],
+#                          "angle": siblingAngle})
+#
+#    if any([np.isnan(branchRadii[c]) for c in branch.children]):
+#        childData.sort(key=lambda cd: cd["radius"], reverse=True)  # descending radius
+#        minAngle = min(cd["angle"] for cd in childData)
+#        for cd in childData:
+#            if cd["angle"] / minAngle <= 1.1:
+#                continuationBranch = cd["branch"]
+#                break
+#    else:
+#        continuationBranch = min(childData, key=lambda x: x["angle"])["branch"]
+#
+#    return continuationBranch

@@ -59,7 +59,7 @@ def findNewBranches(skeletonData: npt.NDArray,
         skeletonData["isFix"][newBranch] = True
         skeletonData["isBranch"][newBranch] = True
 
-        newBranches.append(Branch(None, skeletonData["Coords"][newBranch]))
+        newBranches.append(Branch(skeletonData["Coords"][newBranch]))
 
     return newBranches
 

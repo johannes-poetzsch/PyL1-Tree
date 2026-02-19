@@ -175,9 +175,7 @@ def connectSkeleton(skeleton: List[Branch],
     junctionBranch = junctionBranch.split(junctionIdx)
 
     rootPoint = skeleton[0].skeletonPoints[0]
-    connectionBranch = Branch(id=-1,
-                              skeletonPoints=np.stack([junctionPoint, rootPoint]),
-                              parent=junctionBranch)
+    connectionBranch = Branch(skeletonPoints=np.stack([junctionPoint, rootPoint]), parent=junctionBranch)
     
     for branch in skeleton:
         branch.setParent(connectionBranch)

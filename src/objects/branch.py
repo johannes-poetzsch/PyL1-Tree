@@ -1,5 +1,6 @@
 from __future__ import annotations
 import cupy as cp
+from itertools import count
 import numpy as np
 import numpy.typing as npt
 from typing import Iterable, List, Optional, Tuple
@@ -9,18 +10,18 @@ from ..utils.geometry import getStripAngles, linesPointsDistances, stripPointsDi
 
 
 class Branch:
+    idGenerator = count()
+
     def __init__(self,
-                 id: Optional[int],
                  skeletonPoints: npt.NDArray[np.double],
                  tlsPoints: Optional[npt.NDArray[np.double]] = None,
-                 parent: Branch = None,
-                 onGPU: bool = False):
-        self.id = id
+                 parent: Branch = None):
+        self.id = next(Branch.idGenerator)
         self.isFlipped = False
         self.skeletonPoints = skeletonPoints
         self.endPointIndices: Optional[List[int]] = None
         self.tlsPoints = np.empty([0,3], dtype=np.double) if tlsPoints is None else tlsPoints
-        self.onGPU = onGPU
+        self.onGPU = cp.get_array_module(skeletonPoints, tlsPoints)
         self.children: set[Branch] = set()
         self.parent: Optional[Branch] = None
         self.setParent(parent)
@@ -81,12 +82,11 @@ class Branch:
         if splitIdx >= len(self.skeletonPoints) - 1:
             return self
 
-        splitEnd = Branch(self.id, self.skeletonPoints[splitIdx:])
+        splitEnd = Branch(self.skeletonPoints[splitIdx:], parent=self)
 
-        for child in list(self.children):
+        for child in [c for c in self.children if c is not splitEnd]:
             child.setParent(splitEnd)
 
-        splitEnd.setParent(self)
         self.skeletonPoints = self.skeletonPoints[:splitIdx+1]
         if len(self.tlsPoints) > 0:
             reassignPoints([self, splitEnd], changedBranches=[self])

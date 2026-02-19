@@ -110,10 +110,11 @@ def buildNeighborGraph(tlsPoints: npt.NDArray[np.double],
     neighborDistances, neighborIndices = tlsKDTree.query(tlsPoints, k=kNeighbors + 1)
     neighborDistances, neighborIndices = neighborDistances[:, 1:], neighborIndices[:, 1:]
 
+    pointCount = len(tlsPoints)
     neighborGraph = csr_array((neighborDistances.flatten(),
                                neighborIndices.flatten(),
-                               np.arange(len(tlsPoints) + 1) * kNeighbors),
-                              shape=(len(tlsPoints), len(tlsPoints)))
+                               np.arange(pointCount + 1) * kNeighbors),
+                              shape=(pointCount, pointCount))
     return neighborGraph
 
 

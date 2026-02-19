@@ -153,7 +153,7 @@ class UnconnectedComponent(Component):
 
         parent = startBranch.split(startIdx)
 
-        connectionBranch = Branch(None, skeletonPoints, tlsPoints, parent)
+        connectionBranch = Branch(skeletonPoints, tlsPoints, parent)
 
         childBranch = endBranch.split(endIdx)
         if childBranch is None:  # connection end point is root point of the component

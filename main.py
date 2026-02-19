@@ -4,7 +4,7 @@ from typing import List
 
 from src.adjustBifurcations import adjustBifurcations
 from src.extendSkeleton import extendSkeleton
-from src.filterBranches import filterBranches
+from src.filterBranches import filterTreeBranches
 from src.smoothBranches import smoothBranches
 from src.objects.branch import Branch
 from src.utils.iteration import breadthFirstSearch
@@ -29,12 +29,12 @@ def main():
     treeModel = list(breadthFirstSearch(stem))
     print(len(treeModel))
 
-    prunedTlsPoints = filterBranches(stem, parameters)
+    prunedTlsPoints = filterTreeBranches(stem, parameters)
 
     if prunedTlsPoints is not None:
         unassignedTlsPoints = np.append(unassignedTlsPoints, prunedTlsPoints, axis=0)
 
-    unassignedTlsPoints = smoothBranches(stem, unassignedTlsPoints, parameters)
+    unassignedTlsPoints = smoothBranches(stem, tlsPoints, unassignedTlsPoints, parameters)
     extendSkeleton(stem, unassignedTlsPoints, parameters)
 
     print("finished")
