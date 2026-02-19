@@ -4,7 +4,8 @@ import numpy as np
 
 from itertools import combinations
 from typing import List, Tuple
-from ..objects.branch import Branch
+from src.objects.branch import Branch
+
 
 def parse_struct_array(eng: m.MatlabEngine,
                        name: str):

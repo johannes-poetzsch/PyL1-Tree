@@ -32,10 +32,6 @@ class Component:
         return self.directionData[branch]
 
 
-    def generateDirectionData(self, branch: Branch, minDistanceThreshold: float):
-        raise NotImplementedError("only implemented by subclasses")
-
-
     def getPoints(self, tlsPointLookUp: KDTree
                   ) -> Tuple[npt.NDArray[np.double], List[npt.NDArray[np.double]]]:
         componentPointIndices, searchRanges = [], []
@@ -54,6 +50,10 @@ class Component:
         componentPointIndices = np.unique(componentPointIndices)
         componentPoints = tlsPointLookUp.data[componentPointIndices]
         return componentPoints, searchRanges
+
+
+    def generateDirectionData(self, branch: Branch, minDistanceThreshold: float):
+        raise NotImplementedError("only implemented by subclasses")
 
 
     @staticmethod

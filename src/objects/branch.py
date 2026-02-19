@@ -1,12 +1,12 @@
 from __future__ import annotations
 import cupy as cp
-from itertools import count
+from itertools import count, repeat
 import numpy as np
 import numpy.typing as npt
+from scipy.spatial import KDTree
 from typing import Iterable, List, Optional, Tuple
 
-from ..utils.branchUtils import findCloseBranches, reassignPoints
-from ..utils.geometry import getStripAngles, linesPointsDistances, stripPointsDistances
+from src.utils.geometry import getStripAngles, linesPointsDistances, stripPointsDistances
 
 
 class Branch:
@@ -23,10 +23,32 @@ class Branch:
         self.tlsPoints = np.empty([0,3], dtype=np.double) if tlsPoints is None else tlsPoints
         self.onGPU = cp.get_array_module(skeletonPoints, tlsPoints)
         self.children: set[Branch] = set()
+
         self.parent: Optional[Branch] = None
         self.setParent(parent)
+
+        self.boundingBoxMax, self.boundingBoxMin, self.length = None, None, None
         self.updateSkeletonMeasurements()
+
         self.isRemoved = False
+
+
+    def isLeaf(self):
+        return len(self.children) == 0
+
+
+    def isStem(self):
+        return self.parent is None
+
+
+    def setParent(self, parent: Optional[Branch]):
+        if self.parent is not None:
+            self.parent.children.remove(self)
+
+        if parent is not None:
+            parent.children.add(self)
+
+        self.parent = parent
 
 
     def getCentrifugalOrder(self) -> int:
@@ -61,52 +83,7 @@ class Branch:
             self.skeletonPoints = np.flipud(self.skeletonPoints)
 
 
-    def reorientSubtree(self, newParent: Branch):
-        for child in self.children:
-            if child is not newParent:
-                child.setParent(newParent)
-
-        self.skeletonPoints = np.flipud(self.skeletonPoints)
-        if self.endPointIndices is not None:
-            self.endPointIndices = [len(self.skeletonPoints)-1 - idx for idx in self.endPointIndices]
-
-        if self.parent is not None:
-            self.parent.reorientSubtree(self)
-        self.setParent(newParent)
-
-
-    # returns branch that ends at splitIdx.
-    def split(self, splitIdx: int | np.intp) -> Branch:
-        if splitIdx <= 0:
-            return self.parent
-        if splitIdx >= len(self.skeletonPoints) - 1:
-            return self
-
-        splitEnd = Branch(self.skeletonPoints[splitIdx:], parent=self)
-
-        for child in [c for c in self.children if c is not splitEnd]:
-            child.setParent(splitEnd)
-
-        self.skeletonPoints = self.skeletonPoints[:splitIdx+1]
-        if len(self.tlsPoints) > 0:
-            reassignPoints([self, splitEnd], changedBranches=[self])
-
-        if self.endPointIndices is not None:
-            endPointIndices = self.endPointIndices
-            self.endPointIndices = None
-            for idx in [i for i in endPointIndices if i not in [0, splitIdx, len(self.skeletonPoints) - 1]]:
-                if idx < splitIdx:
-                    self.addEndPoints([idx])
-                else:
-                    splitEnd.addEndPoints([idx])
-
-        self.updateSkeletonMeasurements()
-
-        return self
-
-
-    def getInterpolation(self, resolution: np.double) -> Tuple[npt.NDArray[np.double], npt.NDArray[np.intp]]:
-
+    def getInterpolation(self, resolution: float) -> Tuple[npt.NDArray[np.double], npt.NDArray[np.intp]]:
         segments = self.skeletonPoints[1:] - self.skeletonPoints[:-1]
         segmentLengths = np.linalg.norm(segments, axis=1)
 
@@ -120,6 +97,10 @@ class Branch:
             + [self.skeletonPoints[-1].reshape(1,3)], 
             axis=0)
         return interpolation, indices
+
+
+    def getAngles(self) -> Optional[npt.NDArray[np.double]]:
+        return getStripAngles(self.skeletonPoints)
     
 
     def getDistances(self, 
@@ -151,10 +132,6 @@ class Branch:
         return firstSegmentDistances, restBranchDistances
     
 
-    def getAngles(self) -> Optional[npt.NDArray[np.double]]:
-        return getStripAngles(self.skeletonPoints)
-    
-
     def updateSkeletonMeasurements(self):
         self.boundingBoxMin = np.min(self.skeletonPoints, axis=0)
         self.boundingBoxMax = np.max(self.skeletonPoints, axis=0)
@@ -167,11 +144,11 @@ class Branch:
         delta1 = np.clip(self.boundingBoxMin - boundingBoxMax, a_min=0, a_max=None)
         delta2 = np.clip(boundingBoxMin - self.boundingBoxMax, a_min=0, a_max=None)
         return np.linalg.norm(delta1 + delta2, axis=-1)
-    
+
 
     def branchBoundingBoxDistance(self, other: Branch):
         return self.getBoundingBoxDistance(other.boundingBoxMin, other.boundingBoxMax)
-    
+
 
     def expand(self):
         if len(self.children) != 1:
@@ -194,24 +171,6 @@ class Branch:
         self.updateSkeletonMeasurements()
 
 
-    def isLeaf(self):
-        return len(self.children) == 0
-    
-
-    def isStem(self):
-        return self.parent is None
-
-
-    def setParent(self, parent: Optional[Branch]):
-        if self.parent is not None:
-            self.parent.children.remove(self)
-
-        if parent is not None:
-            parent.children.add(self)
-
-        self.parent = parent
-
-
     def remove(self,
                adjustConnectedBranches: bool = True) -> npt.NDArray[np.double]:
         self.isRemoved = True
@@ -230,6 +189,117 @@ class Branch:
             self.parent.expand()
 
         return self.tlsPoints
+
+
+    def reorientSubtree(self, newParent: Branch):
+        for child in self.children:
+            if child is not newParent:
+                child.setParent(newParent)
+
+        self.skeletonPoints = np.flipud(self.skeletonPoints)
+        if self.endPointIndices is not None:
+            self.endPointIndices = [len(self.skeletonPoints)-1 - idx for idx in self.endPointIndices]
+
+        if self.parent is not None:
+            self.parent.reorientSubtree(self)
+        self.setParent(newParent)
+
+
+    # returns branch that ends at splitIdx.
+    def split(self, splitIdx: int | np.intp) -> Branch:
+        splitIdx = splitIdx % len(self.skeletonPoints)
+
+        if splitIdx == 0:
+            return self.parent
+        if splitIdx == len(self.skeletonPoints) - 1:
+            return self
+
+        splitEnd = Branch(self.skeletonPoints[splitIdx:], parent=self)
+
+        for child in [c for c in self.children if c is not splitEnd]:
+            child.setParent(splitEnd)
+
+        self.skeletonPoints = self.skeletonPoints[:splitIdx + 1]
+        if len(self.tlsPoints) > 0:
+            Branch.reassignPoints([self, splitEnd], changedBranches=[self])
+
+        if self.endPointIndices is not None:
+            endPointIndices = self.endPointIndices
+            self.endPointIndices = None
+            for idx in [i for i in endPointIndices if i not in [0, splitIdx, len(self.skeletonPoints) - 1]]:
+                if idx < splitIdx:
+                    self.addEndPoints([idx])
+                else:
+                    splitEnd.addEndPoints([idx])
+
+        self.updateSkeletonMeasurements()
+
+        return self
+
+
+    @staticmethod
+    def assignAllPoints(points: npt.NDArray[np.double],
+                        branches: List[Branch],
+                        useTrimming=False) -> npt.NDArray[np.double]:
+        closeBranchIndices = Branch.findCloseBranches(points, branches)
+
+        branchOrder = np.argsort(closeBranchIndices)
+        closeBranchIndices = closeBranchIndices[branchOrder]
+        points = points[branchOrder]
+
+        branchIndices, indices, counts = np.unique(closeBranchIndices, return_index=True, return_counts=True)
+
+        unassignedPoints = []
+        for branchIdx, idx, pointCount in zip(branchIndices, indices, counts):
+            unassignedPoints.append(
+                Branch.assignLocalPoints(points[idx:idx + pointCount], branches, [branches[branchIdx]],
+                                         useTrimming=useTrimming))
+        return np.concatenate(unassignedPoints, axis=0)
+
+
+    @staticmethod
+    def assignLocalPoints(points: npt.NDArray[np.double],
+                          branches: List[Branch],
+                          closeBranches: Optional[List[Branch]] = None,
+                          originalDistances: Optional[npt.NDArray[np.double]] = None,
+                          useTrimming=False) -> npt.NDArray[np.double]:
+        closeBranches = branches if closeBranches is None else closeBranches
+        closestBranchIndices, _ = Branch.findLocalClosestBranches(points, branches, closeBranches,
+                                                                  originalDistances, useTrimming)
+
+        if cp.get_array_module(points) is cp:
+            points = cp.asnumpy(points)
+
+        branchOrder = np.argsort(closestBranchIndices)
+        points = points[branchOrder]
+        closestBranchIndices = closestBranchIndices[branchOrder]
+
+        branchIndices, indices, counts = np.unique(closestBranchIndices, return_index=True, return_counts=True)
+
+        unassignedPoints = np.empty((0, 3), dtype=points.dtype)
+
+        for branchIdx, idx, count in zip(branchIndices, indices, counts):
+            if branchIdx < 0:
+                unassignedPoints = points[idx:idx + count]
+                continue
+            branch = branches[branchIdx]
+            branch.tlsPoints = np.append(branch.tlsPoints, points[idx:idx + count], axis=0)
+
+        return unassignedPoints
+
+
+    @staticmethod
+    def findCloseBranches(points: npt.NDArray[np.double],
+                          branches: List[Branch]) -> npt.NDArray[int]:
+        skeletonPoints = np.concatenate([b.skeletonPoints for b in branches], axis=0)
+        branchIds = np.arange(len(branches), dtype=int).repeat([len(b.skeletonPoints) for b in branches])
+
+        lookUp = KDTree(skeletonPoints)
+
+        _, closestIndices = lookUp.query(points, k=1)
+        closeBranchIndices = branchIds[closestIndices]
+
+        return closeBranchIndices
 
 
     @staticmethod
@@ -322,51 +392,24 @@ class Branch:
 
 
     @staticmethod
-    def assignLocalPoints(points: npt.NDArray[np.double],
-                          branches: List[Branch],
-                          closeBranches: Optional[List[Branch]] = None,
-                          originalDistances: Optional[npt.NDArray[np.double]] = None,
-                          useTrimming = False) -> npt.NDArray[np.double]:
-        closeBranches = branches if closeBranches is None else closeBranches
-        closestBranchIndices, _ = Branch.findLocalClosestBranches(points, branches, closeBranches,
-                                                                  originalDistances, useTrimming)
+    def reassignPoints(branches: List[Branch],
+                       unassignedTlsPoints: Optional[npt.NDArray[np.double]] = None,
+                       changedBranches: Optional[List[Branch]] = None,
+                       originalDistances: Optional[List[npt.NDArray[np.double]]] = None,
+                       useTrimming: bool = True
+                       ) -> npt.NDArray[np.double]:
+        changedBranches = branches if changedBranches is None else changedBranches
+        originalDistances = repeat(None) if originalDistances is None else originalDistances
+        prunedTlsPoints = []
 
-        if cp.get_array_module(points) is cp:
-            points = cp.asnumpy(points)
+        for branch, od in zip(changedBranches, originalDistances):
+            tlsPoints = branch.tlsPoints
+            branch.tlsPoints = np.empty([0,3], dtype=np.double)
+            prunedTlsPoints.append(Branch.assignLocalPoints(tlsPoints, branches, closeBranches=[branch],
+                                                            originalDistances=od,
+                                                            useTrimming=useTrimming))
 
-        branchOrder = np.argsort(closestBranchIndices)
-        points = points[branchOrder]
-        closestBranchIndices = closestBranchIndices[branchOrder]
+        if unassignedTlsPoints is not None:
+            prunedTlsPoints.append(Branch.assignAllPoints(unassignedTlsPoints, branches, useTrimming=True))
 
-        branchIndices, indices, counts = np.unique(closestBranchIndices, return_index=True, return_counts=True)
-
-        unassignedPoints = np.empty((0,3), dtype=points.dtype)
-
-        for branchIdx, idx, count in zip(branchIndices, indices, counts):
-            if branchIdx < 0:
-                unassignedPoints = points[idx:idx+count]
-                continue
-            branch = branches[branchIdx]
-            branch.tlsPoints = np.append(branch.tlsPoints, points[idx:idx+count], axis=0)
-
-        return unassignedPoints
-
-
-    @staticmethod
-    def assignAllPoints(points: npt.NDArray[np.double],
-                        branches: List[Branch],
-                        useTrimming = False) -> npt.NDArray[np.double]:
-        closeBranchIndices = findCloseBranches(points, branches)
-
-        branchOrder = np.argsort(closeBranchIndices)
-        closeBranchIndices = closeBranchIndices[branchOrder]
-        points = points[branchOrder]
-
-        branchIndices, indices, counts = np.unique(closeBranchIndices, return_index=True, return_counts=True)
-
-        unassignedPoints = []
-        for branchIdx, idx, count in zip(branchIndices, indices, counts):
-            unassignedPoints.append(
-                Branch.assignLocalPoints(points[idx:idx+count], branches, [branches[branchIdx]],
-                                         useTrimming=useTrimming))
-        return np.concatenate(unassignedPoints, axis=0)
+        return np.concatenate(prunedTlsPoints, axis=0)

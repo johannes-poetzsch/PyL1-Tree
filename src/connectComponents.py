@@ -6,66 +6,8 @@ from typing import List, Optional, Tuple
 
 from objects.branch import Branch
 from objects.component import ConnectedComponent, UnconnectedComponent
-from utils.branchUtils import reassignPoints
 from utils.iteration import breadthFirstSearch
 from utils.geometry import angle, normalizeVectors, stripPointsDistances
-
-
-def areConnectionAnglesCredible(connectionDirection: npt.NDArray[np.double],
-                                parentDirections: Optional[npt.NDArray[np.double]],
-                                siblingDirections: Optional[npt.NDArray[np.double]],
-                                startDirection: Optional[npt.NDArray[np.double]],
-                                childDirections: Optional[npt.NDArray[np.double]],
-                                minAngleThreshold: float,
-                                maxAngleThreshold: float
-                                ) -> bool:
-    startToConnectionAngle = angle(startDirection, -connectionDirection)
-    if startToConnectionAngle > maxAngleThreshold:
-        return False
-
-    if parentDirections is not None:
-        anglesToParent = angle(parentDirections, -connectionDirection)
-        if np.any(anglesToParent > maxAngleThreshold):
-            return False
-
-    if siblingDirections is not None:
-        anglesToSiblings = angle(siblingDirections, connectionDirection)
-        if np.any(anglesToSiblings <= minAngleThreshold):
-            return False
-
-    if childDirections is not None:
-        anglesToChildren = angle(childDirections, connectionDirection)
-        if np.any(anglesToChildren > maxAngleThreshold):
-            return False
-        revAnglesToChildren = angle(childDirections, -connectionDirection)
-        if np.any(revAnglesToChildren <= minAngleThreshold):
-            return False
-
-    return True
-
-
-def isConnectionDensityCredible(startPoint: npt.NDArray[np.double],
-                                endPoint: npt.NDArray[np.double],
-                                pedalPoints: npt.NDArray[np.double],
-                                windowSize: float,
-                                densityFactor: float) -> bool:
-    vector = endPoint - startPoint
-    length = np.linalg.norm(vector)
-    pointsPerWindow = len(pedalPoints) / length * densityFactor * windowSize
-
-    relativeWindowSize = windowSize / length
-    mainAxis = vector.argmax()
-
-    projectedPedalPoints = pedalPoints[mainAxis]
-    maxProjectedWindowSize = relativeWindowSize * vector[mainAxis]
-
-    projectedPedalPoints = np.append(projectedPedalPoints, (startPoint[mainAxis], endPoint[mainAxis]), axis=0)
-    projectedPedalPoints.sort()
-
-    projectedWindowSizes = projectedPedalPoints[pointsPerWindow:] - projectedPedalPoints[:-pointsPerWindow]
-
-    isCredible = np.all(projectedWindowSizes <= maxProjectedWindowSize)
-    return isCredible
 
 
 def connectComponents(rootComponentStem: Branch,
@@ -135,7 +77,7 @@ def connectComponents(rootComponentStem: Branch,
         if len(branch.children) == 1:
             branch.expand()
 
-    trimmedPoints1 = reassignPoints(list(rootComponent.branches), useTrimming=True)
+    trimmedPoints1 = Branch.reassignPoints(list(rootComponent.branches), useTrimming=True)
     allBranches = list(chain(rootComponent.branches,
                              chain.from_iterable([c.branches for c in unconnectedComponents])))
     trimmedPoints2 = Branch.assignAllPoints(unassignedPoints, allBranches, useTrimming=True)
@@ -245,3 +187,60 @@ def scoreConnection(startBranch: Branch,
     score = len(connectionPoints) / connectionLength / np.mean(pedalDistances)
 
     return score
+
+
+def areConnectionAnglesCredible(connectionDirection: npt.NDArray[np.double],
+                                parentDirections: Optional[npt.NDArray[np.double]],
+                                siblingDirections: Optional[npt.NDArray[np.double]],
+                                startDirection: Optional[npt.NDArray[np.double]],
+                                childDirections: Optional[npt.NDArray[np.double]],
+                                minAngleThreshold: float,
+                                maxAngleThreshold: float
+                                ) -> bool:
+    startToConnectionAngle = angle(startDirection, -connectionDirection)
+    if startToConnectionAngle > maxAngleThreshold:
+        return False
+
+    if parentDirections is not None:
+        anglesToParent = angle(parentDirections, -connectionDirection)
+        if np.any(anglesToParent > maxAngleThreshold):
+            return False
+
+    if siblingDirections is not None:
+        anglesToSiblings = angle(siblingDirections, connectionDirection)
+        if np.any(anglesToSiblings <= minAngleThreshold):
+            return False
+
+    if childDirections is not None:
+        anglesToChildren = angle(childDirections, connectionDirection)
+        if np.any(anglesToChildren > maxAngleThreshold):
+            return False
+        revAnglesToChildren = angle(childDirections, -connectionDirection)
+        if np.any(revAnglesToChildren <= minAngleThreshold):
+            return False
+
+    return True
+
+
+def isConnectionDensityCredible(startPoint: npt.NDArray[np.double],
+                                endPoint: npt.NDArray[np.double],
+                                pedalPoints: npt.NDArray[np.double],
+                                windowSize: float,
+                                densityFactor: float) -> bool:
+    vector = endPoint - startPoint
+    length = np.linalg.norm(vector)
+    pointsPerWindow = len(pedalPoints) / length * densityFactor * windowSize
+
+    relativeWindowSize = windowSize / length
+    mainAxis = vector.argmax()
+
+    projectedPedalPoints = pedalPoints[mainAxis]
+    maxProjectedWindowSize = relativeWindowSize * vector[mainAxis]
+
+    projectedPedalPoints = np.append(projectedPedalPoints, (startPoint[mainAxis], endPoint[mainAxis]), axis=0)
+    projectedPedalPoints.sort()
+
+    projectedWindowSizes = projectedPedalPoints[pointsPerWindow:] - projectedPedalPoints[:-pointsPerWindow]
+
+    isCredible = np.all(projectedWindowSizes <= maxProjectedWindowSize)
+    return isCredible

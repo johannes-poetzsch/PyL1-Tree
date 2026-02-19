@@ -9,7 +9,6 @@ from itertools import combinations
 from typing import Dict, List, Optional, Tuple
 
 from objects.branch import Branch
-from utils.branchUtils import reassignPoints
 from utils.geometry import linesPointsDistances, normalizeVectors, angle
 from utils.iteration import breadthFirstSearch
 #from src.utils.kernels import cum_min
@@ -42,6 +41,38 @@ def adjustBifurcations(stem, parameters):
             else:
                 # the bifurcation was merged with the previous bifurcation and the result has to adjusted too
                 parent = newParent
+
+
+def applyAdjustment(stem: Branch,
+                    associatedBranches: List[Branch],
+                    adjustmentIdx: int,
+                    adjustmentPoint: npt.NDArray[np.double],
+                    adjustmentBranch: Branch
+                    ) -> Branch:
+    originalDistances = [b.getDistances(b.tlsPoints) for b in associatedBranches]
+
+    adjustmentBranch.skeletonPoints = adjustmentBranch.skeletonPoints[adjustmentIdx:]
+
+    for branch in associatedBranches:
+        branch.skeletonPoints[0] = adjustmentPoint
+        branch.updateSkeletonMeasurements()
+        branch.unflip()
+
+    Branch.reassignPoints(list(breadthFirstSearch(stem)), changedBranches=associatedBranches,
+                   originalDistances=originalDistances, useTrimming=False)
+
+    newParent = None
+    if len(adjustmentBranch.skeletonPoints) <= 1:
+        # if the current parent is removed, save the new parent to adjust the new combined bifurcation
+        newParent = adjustmentBranch.parent
+        # branch can be removed
+        del(associatedBranches[associatedBranches.index(adjustmentBranch)])
+        unassignedPoints = adjustmentBranch.remove()
+        Branch.assignLocalPoints(unassignedPoints, list(breadthFirstSearch(stem)),
+                                 closeBranches=associatedBranches,
+                                 useTrimming=False)
+
+    return newParent
 
 
 def determineAdjustment(associatedBranches: List[Branch],
@@ -135,118 +166,6 @@ def determineAdjustment(associatedBranches: List[Branch],
     return adjustmentIdx, adjustmentPoint, adjustmentBranch
 
 
-def applyAdjustment(stem: Branch, 
-                    associatedBranches: List[Branch],
-                    adjustmentIdx: int,
-                    adjustmentPoint: npt.NDArray[np.double], 
-                    adjustmentBranch: Branch
-                    ) -> Branch:
-    originalDistances = [b.getDistances(b.tlsPoints) for b in associatedBranches]
-
-    adjustmentBranch.skeletonPoints = adjustmentBranch.skeletonPoints[adjustmentIdx:]
-
-    for branch in associatedBranches:
-        branch.skeletonPoints[0] = adjustmentPoint
-        branch.updateSkeletonMeasurements()
-        branch.unflip()
-
-    reassignPoints(list(breadthFirstSearch(stem)), changedBranches=associatedBranches,
-                   originalDistances=originalDistances, useTrimming=False)
-
-    newParent = None
-    if len(adjustmentBranch.skeletonPoints) <= 1:
-        # if the current parent is removed, save the new parent to adjust the new combined bifurcation
-        newParent = adjustmentBranch.parent
-        # branch can be removed
-        del(associatedBranches[associatedBranches.index(adjustmentBranch)])
-        unassignedPoints = adjustmentBranch.remove()
-        Branch.assignLocalPoints(unassignedPoints, list(breadthFirstSearch(stem)),
-                                 closeBranches=associatedBranches,
-                                 useTrimming=False)
-
-    return newParent
-
-
-def isBifurcationCredible(targetPoints: npt.NDArray[np.double],
-                          targetBranch: Branch, 
-                          parentBranch: Branch, 
-                          associatedBranches: List[Branch],
-                          minAngleThreshold: float,
-                          maxAngleThreshold: float) -> npt.NDArray[np.bool]:
-    minAngleThreshold = np.deg2rad(minAngleThreshold)
-    maxAngleThreshold = np.deg2rad(maxAngleThreshold)
-
-    # The first target point is the current bifurcation and does not have to be checked
-    # The last point does not have a next point, so it is nan
-    targetPoints = targetPoints.copy()
-    targetPoints[0] = np.nan
-    nextPoints = np.roll(targetPoints, -1, axis=0)
-
-    if targetBranch is parentBranch:
-        parentDirection = normalizeVectors(targetPoints - nextPoints)
-    else:
-        parentDirection = normalizeVectors(targetPoints - parentBranch.skeletonPoints[1])
-
-    anglesAtBifurcationCredible = []
-    anglesAfterBifurcationCredible = []
-    anglesBetweenChildBranchesCredible = []
-    childBranchDirections = []
-
-    for childBranch in associatedBranches:
-        if childBranch is parentBranch:
-            continue
-        if childBranch is targetBranch:
-            nextNextPoints = np.roll(nextPoints, -1, axis=0)            
-            
-            childDirectionAtBifurcation = normalizeVectors(nextPoints - targetPoints)
-            childDirectionAfterBifurcation = normalizeVectors(nextNextPoints - nextPoints)
-        else:
-            childDirectionAtBifurcation = normalizeVectors(childBranch.skeletonPoints[1] - targetPoints)
-
-        if len(childBranch.skeletonPoints) > 2:
-            childDirectionAfterBifurcation = normalizeVectors(childBranch.skeletonPoints[2] - childBranch.skeletonPoints[1])
-        else:
-            childDirectionAfterBifurcation = None
-
-        childBranchDirections.append(childDirectionAtBifurcation)
-        angleAtBifurcation = angle(parentDirection, childDirectionAtBifurcation)
-
-        isAngleAtBifurcationCredible = angleAtBifurcation <= maxAngleThreshold
-        isAngleAtBifurcationCredible[np.isnan(angleAtBifurcation)] = True
-        anglesAtBifurcationCredible.append(isAngleAtBifurcationCredible)
-
-        if childDirectionAfterBifurcation is not None:
-            angleAfterBifurcation = angle(childDirectionAtBifurcation, childDirectionAfterBifurcation)
-
-            isAngleAfterBifurcationCredible = angleAfterBifurcation <= maxAngleThreshold
-            isAngleAfterBifurcationCredible[np.isnan(angleAfterBifurcation)] = True
-            anglesAfterBifurcationCredible.append(isAngleAfterBifurcationCredible)
-
-    for [direction_1, direction_2] in combinations(childBranchDirections, 2):
-        angleBetweenChildBranches = angle(direction_1, direction_2)
-        isAngleBetweenChildBranchesCredible = angleBetweenChildBranches > minAngleThreshold
-        isAngleBetweenChildBranchesCredible[np.isnan(angleBetweenChildBranches)] = True
-        anglesBetweenChildBranchesCredible.append(isAngleBetweenChildBranchesCredible)
-
-    isCredible = np.all(np.stack(anglesAtBifurcationCredible + 
-                                 anglesAfterBifurcationCredible + 
-                                 anglesBetweenChildBranchesCredible), axis=0)
-    return isCredible[1:]
-
-
-def getLengthMetrics(targetPoints: npt.NDArray[np.double],
-                     otherBranches: List[Branch],
-                     isCredible: npt.NDArray[np.bool]
-                     ) -> Tuple[npt.NDArray[np.double], npt.NDArray[np.double]]:
-    newBifurcationLength = np.sum(np.stack([np.linalg.norm(targetPoints[1:][isCredible] - b.skeletonPoints[1], axis=1) for b in otherBranches]), axis=0)
-
-    targetBifurcationSegmentLength = np.cumsum(np.linalg.norm(targetPoints - np.roll(targetPoints, -1, axis=0), axis=1))[:-1][isCredible]
-    otherBifurcationSegmentsLength = np.sum(np.stack([np.linalg.norm(b.skeletonPoints[0] - b.skeletonPoints[1], axis=-1) for b in otherBranches]))
-    removedSegmentsLength = targetBifurcationSegmentLength + otherBifurcationSegmentsLength
-
-    return newBifurcationLength, removedSegmentsLength
-
-
 def getDistanceMetrics(targetPoints: npt.NDArray[np.double],
                        otherBranches: List[Branch],
                        tlsPoints: npt.NDArray[np.double],
@@ -303,3 +222,84 @@ def getDistanceMetrics(targetPoints: npt.NDArray[np.double],
         associatedTlsCount = cp.asnumpy(associatedTlsCount)
 
     return newDistancesSum, associatedTlsToRemovedSegmentsSum, associatedTlsToNewBifurcationSum, associatedTlsCount
+
+
+def getLengthMetrics(targetPoints: npt.NDArray[np.double],
+                     otherBranches: List[Branch],
+                     isCredible: npt.NDArray[np.bool]
+                     ) -> Tuple[npt.NDArray[np.double], npt.NDArray[np.double]]:
+    newBifurcationLength = np.sum(np.stack([np.linalg.norm(targetPoints[1:][isCredible] - b.skeletonPoints[1], axis=1) for b in otherBranches]), axis=0)
+
+    targetBifurcationSegmentLength = np.cumsum(np.linalg.norm(targetPoints - np.roll(targetPoints, -1, axis=0), axis=1))[:-1][isCredible]
+    otherBifurcationSegmentsLength = np.sum(np.stack([np.linalg.norm(b.skeletonPoints[0] - b.skeletonPoints[1], axis=-1) for b in otherBranches]))
+    removedSegmentsLength = targetBifurcationSegmentLength + otherBifurcationSegmentsLength
+
+    return newBifurcationLength, removedSegmentsLength
+
+
+def isBifurcationCredible(targetPoints: npt.NDArray[np.double],
+                          targetBranch: Branch,
+                          parentBranch: Branch,
+                          associatedBranches: List[Branch],
+                          minAngleThreshold: float,
+                          maxAngleThreshold: float) -> npt.NDArray[np.bool]:
+    minAngleThreshold = np.deg2rad(minAngleThreshold)
+    maxAngleThreshold = np.deg2rad(maxAngleThreshold)
+
+    # The first target point is the current bifurcation and does not have to be checked
+    # The last point does not have a next point, so it is nan
+    targetPoints = targetPoints.copy()
+    targetPoints[0] = np.nan
+    nextPoints = np.roll(targetPoints, -1, axis=0)
+
+    if targetBranch is parentBranch:
+        parentDirection = normalizeVectors(targetPoints - nextPoints)
+    else:
+        parentDirection = normalizeVectors(targetPoints - parentBranch.skeletonPoints[1])
+
+    anglesAtBifurcationCredible = []
+    anglesAfterBifurcationCredible = []
+    anglesBetweenChildBranchesCredible = []
+    childBranchDirections = []
+
+    for childBranch in associatedBranches:
+        if childBranch is parentBranch:
+            continue
+        if childBranch is targetBranch:
+            nextNextPoints = np.roll(nextPoints, -1, axis=0)
+
+            childDirectionAtBifurcation = normalizeVectors(nextPoints - targetPoints)
+            childDirectionAfterBifurcation = normalizeVectors(nextNextPoints - nextPoints)
+        else:
+            childDirectionAtBifurcation = normalizeVectors(childBranch.skeletonPoints[1] - targetPoints)
+
+        if len(childBranch.skeletonPoints) > 2:
+            childDirectionAfterBifurcation = normalizeVectors(
+                childBranch.skeletonPoints[2] - childBranch.skeletonPoints[1])
+        else:
+            childDirectionAfterBifurcation = None
+
+        childBranchDirections.append(childDirectionAtBifurcation)
+        angleAtBifurcation = angle(parentDirection, childDirectionAtBifurcation)
+
+        isAngleAtBifurcationCredible = angleAtBifurcation <= maxAngleThreshold
+        isAngleAtBifurcationCredible[np.isnan(angleAtBifurcation)] = True
+        anglesAtBifurcationCredible.append(isAngleAtBifurcationCredible)
+
+        if childDirectionAfterBifurcation is not None:
+            angleAfterBifurcation = angle(childDirectionAtBifurcation, childDirectionAfterBifurcation)
+
+            isAngleAfterBifurcationCredible = angleAfterBifurcation <= maxAngleThreshold
+            isAngleAfterBifurcationCredible[np.isnan(angleAfterBifurcation)] = True
+            anglesAfterBifurcationCredible.append(isAngleAfterBifurcationCredible)
+
+    for [direction_1, direction_2] in combinations(childBranchDirections, 2):
+        angleBetweenChildBranches = angle(direction_1, direction_2)
+        isAngleBetweenChildBranchesCredible = angleBetweenChildBranches > minAngleThreshold
+        isAngleBetweenChildBranchesCredible[np.isnan(angleBetweenChildBranches)] = True
+        anglesBetweenChildBranchesCredible.append(isAngleBetweenChildBranchesCredible)
+
+    isCredible = np.all(np.stack(anglesAtBifurcationCredible +
+                                 anglesAfterBifurcationCredible +
+                                 anglesBetweenChildBranchesCredible), axis=0)
+    return isCredible[1:]

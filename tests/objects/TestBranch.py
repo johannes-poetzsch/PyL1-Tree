@@ -10,9 +10,7 @@ from src.objects.branch import Branch
 
 @pytest.fixture(scope='module')
 def branch() -> Branch:
-    return Branch(id=0,
-                  toberemoved=np.arange(3, dtype=np.intp),
-                  skeletonPoints=np.arange(9, dtype=np.double).reshape((3, 3)),
+    return Branch(skeletonPoints=np.arange(9, dtype=np.double).reshape((3, 3)),
                   tlsPoints=np.arange(27, dtype=np.double).reshape((9, 3)))
 
 

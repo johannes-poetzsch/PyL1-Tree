@@ -6,10 +6,49 @@ from scipy.stats import ttest_ind
 from typing import Optional, Tuple
 
 
+def angle(directions_a: npt.NDArray,
+          directions_b: npt.NDArray,
+          vectorsAreNormalized: bool = True) -> npt.NDArray:
+    # TODO: compare to torch vecdot
+    if not vectorsAreNormalized:
+        directions_a = normalizeVectors(directions_a)
+        directions_b = normalizeVectors(directions_b)
+    cos = np.vecdot(directions_a, directions_b)
+    cos = np.clip(cos, -1.0, 1.0)
+    return np.arccos(cos)
+
+
 def distanceAlongDirection(startPoints: npt.NDArray[np.double],
                            endPoints: npt.NDArray[np.double],
                            direction: npt.NDArray[np.double]) -> npt.NDArray[np.double]:
     return np.vecdot(endPoints - startPoints, direction)
+
+
+def getStripAngles(strip: npt.NDArray[np.double]) -> Optional[npt.NDArray[np.double]]:
+    if len(strip) < 3:
+        return None
+    directions = normalizeVectors(strip[1:] - strip[:-1])
+    angles = angle(directions[:-1], directions[1:])
+    return angles
+
+
+def linesPointsDistances(lineStartPoints: npt.NDArray, # (L,D)
+                         lineEndPoints: npt.NDArray, # (L,D) or (D)
+                         points: npt.NDArray, # (N,D)
+                         ) -> npt.NDArray | Tuple[npt.NDArray, npt.NDArray]:
+    xp = cp.get_array_module(lineStartPoints, lineEndPoints, points)
+    lineVectors = lineStartPoints - lineEndPoints # (L,D)
+
+    pointsToLineStartPoints = lineStartPoints[:,xp.newaxis] - points # (L,N,D)
+    # TODO: compare runtime to torch vecdot
+    tMatrix = xp.einsum('LND,LD->LN', pointsToLineStartPoints, lineVectors) / xp.einsum('LD,LD->L', lineVectors, lineVectors)[:,xp.newaxis] # (L,N)
+    del pointsToLineStartPoints
+    xp.clip(tMatrix, 0, 1, out=tMatrix)
+    pedalPoints = lineStartPoints[:,xp.newaxis] - tMatrix[:,:,xp.newaxis] * lineVectors[:,xp.newaxis] # (L,N,D)
+    del tMatrix
+    distances = xp.linalg.norm(pedalPoints - points, axis=-1) # (L,N)
+
+    return distances
 
 
 def movingTTest(sequence: npt.NDArray[np.double]) -> Optional[int]:
@@ -32,25 +71,6 @@ def movingTTest(sequence: npt.NDArray[np.double]) -> Optional[int]:
 def normalizeVectors(vectors: npt.NDArray):
     xp = cp.get_array_module(vectors)
     return vectors / xp.expand_dims(xp.linalg.norm(vectors, axis=-1), axis=-1)
-
-
-def linesPointsDistances(lineStartPoints: npt.NDArray, # (L,D)
-                         lineEndPoints: npt.NDArray, # (L,D) or (D)
-                         points: npt.NDArray, # (N,D)
-                         ) -> npt.NDArray | Tuple[npt.NDArray, npt.NDArray]:
-    xp = cp.get_array_module(lineStartPoints, lineEndPoints, points)
-    lineVectors = lineStartPoints - lineEndPoints # (L,D)
-
-    pointsToLineStartPoints = lineStartPoints[:,xp.newaxis] - points # (L,N,D)
-    # TODO: compare runtime to torch vecdot
-    tMatrix = xp.einsum('LND,LD->LN', pointsToLineStartPoints, lineVectors) / xp.einsum('LD,LD->L', lineVectors, lineVectors)[:,xp.newaxis] # (L,N)
-    del pointsToLineStartPoints
-    xp.clip(tMatrix, 0, 1, out=tMatrix)
-    pedalPoints = lineStartPoints[:,xp.newaxis] - tMatrix[:,:,xp.newaxis] * lineVectors[:,xp.newaxis] # (L,N,D)
-    del tMatrix
-    distances = xp.linalg.norm(pedalPoints - points, axis=-1) # (L,N)
-
-    return distances
 
 
 def stripPointsDistances(strip: npt.NDArray, # (L+1,D)
@@ -101,23 +121,3 @@ def stripPointsDistances(strip: npt.NDArray, # (L+1,D)
             return distances, trimmed
         else:
             return distances[untrimmed]
-
-
-def getStripAngles(strip: npt.NDArray[np.double]) -> Optional[npt.NDArray[np.double]]:
-    if len(strip) < 3:
-        return None
-    directions = normalizeVectors(strip[1:] - strip[:-1])
-    angles = angle(directions[:-1], directions[1:])
-    return angles
-
-
-def angle(directions_a: npt.NDArray,
-          directions_b: npt.NDArray,
-          vectorsAreNormalized: bool = True) -> npt.NDArray:
-    # TODO: compare to torch vecdot
-    if not vectorsAreNormalized:
-        directions_a = normalizeVectors(directions_a)
-        directions_b = normalizeVectors(directions_b)
-    cos = np.vecdot(directions_a, directions_b)
-    cos = np.clip(cos, -1.0, 1.0)
-    return np.arccos(cos)

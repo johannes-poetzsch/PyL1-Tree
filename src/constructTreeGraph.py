@@ -49,55 +49,18 @@ def constructTreeGraph(tlsPoints: npt.NDArray[np.double],
     return stem, prunedPoints
 
 
-def preFilterBranches(branches: List[Branch],
-                      baseRadius: float
-                      ) -> Tuple[List[Branch], npt.NDArray[np.double]]:
-    pruneUncenteredBranches(branches)
-    branches = [b for b in branches if not b.isRemoved]
-    removedBranches = [b for b in branches if b.isRemoved]
-    # TODO: Step 1.2.2 does not work in original implementation -> implement anyways or keep behavior?
+def addBasePoint(stem: Branch, basePoint: npt.NDArray[np.double], unassignedTlsPoints: npt.NDArray[np.double]):
+    rootPoint = stem.skeletonPoints[0]
+    stemDirection = normalizeVectors(stem.skeletonPoints[-1] - rootPoint)
+    baseDirection = normalizeVectors(rootPoint - basePoint)
+    baseAngle = angle(stemDirection, baseDirection)
 
-    branches.sort(key=lambda b: b.length, reverse=True)
+    if np.rad2deg(baseAngle) < 90:
+        stem.skeletonPoints = np.insert(stem.skeletonPoints, 0, basePoint, axis=0)
+        stem.updateSkeletonMeasurements()
+        unassignedTlsPoints = Branch.assignLocalPoints(unassignedTlsPoints, [stem], useTrimming=True)
 
-    branchTlsDistances = [b.getDistances(b.tlsPoints) for b in branches]
-    searchRanges = np.array([np.quantile(d, 0.9, method="hazen") for d in branchTlsDistances])
-    filterByInfluence(branches, searchRanges=np.minimum(searchRanges, baseRadius))
-
-    branches = [b for b in branches if not b.isRemoved]
-    removedBranches.extend([b for b in branches if b.isRemoved])
-
-    prunedPoints = np.concatenate([b.tlsPoints for b in branches], axis=0)
-
-    return branches, prunedPoints
-
-
-def constructComponents(branches: List[Branch],
-                        minDistanceThreshold: float,
-                        heightAttribute: int = 2) -> List[Branch]:
-    componentStems = []
-
-    skeletonPoints = np.concatenate([b.skeletonPoints for b in branches], axis=0)
-
-    isEndPoint = np.empty(len(skeletonPoints), dtype=bool)
-    offset = 0
-    for branch in branches:
-        pointCount = len(branch.skeletonPoints)
-        isEndPoint[offset:offset+pointCount] = branch.isEndPoint(np.arange(pointCount, dtype=int))
-        offset += pointCount
-
-    skeletonGraph = createSkeletonGraph(branches, skeletonPoints, isEndPoint, minDistanceThreshold)
-    for c in nx.connected_components(skeletonGraph):
-        if len(c) <= 1:
-            raise ValueError("skeletonGraph should not contain single-point components")
-        # find the terminal node with the lowest height
-        terminalNodes = [node for node in c if skeletonGraph.degree(node) == 1]
-        rootNode = min(terminalNodes, key=lambda node: skeletonPoints[node][heightAttribute])
-
-        componentSkeletonGraph = nx.dfs_tree(skeletonGraph, rootNode)
-        componentStem = buildSubtreeFromGraph(componentSkeletonGraph, skeletonPoints, rootNode, isEndPoint=isEndPoint)
-        componentStems.append(componentStem)
-
-    return componentStems
+    return unassignedTlsPoints
 
 
 def createSkeletonGraph(branches: List[Branch],
@@ -131,15 +94,54 @@ def createSkeletonGraph(branches: List[Branch],
     return skeletonGraph
 
 
-def addBasePoint(stem: Branch, basePoint: npt.NDArray[np.double], unassignedTlsPoints: npt.NDArray[np.double]):
-    rootPoint = stem.skeletonPoints[0]
-    stemDirection = normalizeVectors(stem.skeletonPoints[-1] - rootPoint)
-    baseDirection = normalizeVectors(rootPoint - basePoint)
-    baseAngle = angle(stemDirection, baseDirection)
 
-    if np.rad2deg(baseAngle) < 90:
-        stem.skeletonPoints = np.insert(stem.skeletonPoints, 0, basePoint, axis=0)
-        stem.updateSkeletonMeasurements()
-        unassignedTlsPoints = Branch.assignLocalPoints(unassignedTlsPoints, [stem], useTrimming=True)
+def constructComponents(branches: List[Branch],
+                        minDistanceThreshold: float,
+                        heightAttribute: int = 2) -> List[Branch]:
+    componentStems = []
 
-    return unassignedTlsPoints
+    skeletonPoints = np.concatenate([b.skeletonPoints for b in branches], axis=0)
+
+    isEndPoint = np.empty(len(skeletonPoints), dtype=bool)
+    offset = 0
+    for branch in branches:
+        pointCount = len(branch.skeletonPoints)
+        isEndPoint[offset:offset+pointCount] = branch.isEndPoint(np.arange(pointCount, dtype=int))
+        offset += pointCount
+
+    skeletonGraph = createSkeletonGraph(branches, skeletonPoints, isEndPoint, minDistanceThreshold)
+    for c in nx.connected_components(skeletonGraph):
+        if len(c) <= 1:
+            raise ValueError("skeletonGraph should not contain single-point components")
+        # find the terminal node with the lowest height
+        terminalNodes = [node for node in c if skeletonGraph.degree(node) == 1]
+        rootNode = min(terminalNodes, key=lambda node: skeletonPoints[node][heightAttribute])
+
+        componentSkeletonGraph = nx.dfs_tree(skeletonGraph, rootNode)
+        componentStem = buildSubtreeFromGraph(componentSkeletonGraph, skeletonPoints, rootNode, isEndPoint=isEndPoint)
+        componentStems.append(componentStem)
+
+    return componentStems
+
+
+
+def preFilterBranches(branches: List[Branch],
+                      baseRadius: float
+                      ) -> Tuple[List[Branch], npt.NDArray[np.double]]:
+    pruneUncenteredBranches(branches)
+    branches = [b for b in branches if not b.isRemoved]
+    removedBranches = [b for b in branches if b.isRemoved]
+    # TODO: Step 1.2.2 does not work in original implementation -> implement anyways or keep behavior?
+
+    branches.sort(key=lambda b: b.length, reverse=True)
+
+    branchTlsDistances = [b.getDistances(b.tlsPoints) for b in branches]
+    searchRanges = np.array([np.quantile(d, 0.9, method="hazen") for d in branchTlsDistances])
+    filterByInfluence(branches, searchRanges=np.minimum(searchRanges, baseRadius))
+
+    branches = [b for b in branches if not b.isRemoved]
+    removedBranches.extend([b for b in branches if b.isRemoved])
+
+    prunedPoints = np.concatenate([b.tlsPoints for b in branches], axis=0)
+
+    return branches, prunedPoints

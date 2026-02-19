@@ -6,7 +6,7 @@ from typing import Dict
 
 from objects.branch import Branch
 from src.filterBranches import limitToRange
-from utils.branchUtils import generateSearchRanges, reassignPoints
+from utils.branchUtils import generateSearchRanges
 from utils.geometry import getStripAngles, normalizeVectors, stripPointsDistances
 from utils.iteration import breadthFirstSearch
 from utils.pointMetrics import calculateDensity
@@ -19,7 +19,7 @@ def smoothBranches(stem: Branch,
     branches = list(breadthFirstSearch(stem))
 
     removeBranchAnomalies(stem)
-    unassignedTlsPoints = reassignPoints(list(breadthFirstSearch(stem)), unassignedTlsPoints)
+    unassignedTlsPoints = Branch.reassignPoints(list(breadthFirstSearch(stem)), unassignedTlsPoints)
     searchRanges = generateSearchRanges(list(breadthFirstSearch(stem)), useMedianForStem=False, useTrimming=True)
     unassignedTlsPoints = np.append(unassignedTlsPoints, limitToRange(branches, searchRanges), axis=0)
 

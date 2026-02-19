@@ -7,10 +7,10 @@ from scipy.spatial import KDTree
 from sklearn.cluster import dbscan, k_means
 from typing import Dict, List, Optional
 
-from .objects.branch import Branch
-from .utils.branchUtils import buildSubtreeFromGraph, reassignPoints
-from .utils.geometry import angle, normalizeVectors
-from .utils.iteration import breadthFirstSearch
+from objects.branch import Branch
+from utils.branchUtils import buildSubtreeFromGraph
+from utils.geometry import angle, normalizeVectors
+from utils.iteration import breadthFirstSearch
 
 
 def extendSkeleton(stem: Branch, 
@@ -51,7 +51,7 @@ def extendSkeleton(stem: Branch,
                                                         closeBranches=list(breadthFirstSearch(root)),
                                                         useTrimming=True))
 
-    prunedTlsPoints.append(reassignPoints(branches, useTrimming=True))
+    prunedTlsPoints.append(Branch.reassignPoints(branches, useTrimming=True))
 
     prunedTlsPoints = np.concatenate(prunedTlsPoints, axis=0)
     return prunedTlsPoints
@@ -89,16 +89,6 @@ def getClusters(unassignedTlsPoints: npt.NDArray[np.double],
     return clusters
 
 
-def getSkeletonPointLookUp(stem: Branch):
-    branches = list(breadthFirstSearch(stem))
-    treeSkeletonPoints = [stem.skeletonPoints] + [b.skeletonPoints[1:] for b in branches[1:]]
-    treeSkeletonPoints = np.concatenate(treeSkeletonPoints, axis=0)
-
-    skeletonLookUp = KDTree(treeSkeletonPoints)
-
-    return skeletonLookUp, treeSkeletonPoints
-
-
 def getInterpolatedSkeletonLookUp(stem: Branch, resolution: float):
     branches = list(breadthFirstSearch(stem))
     interpolations = [b.getInterpolation(resolution) for b in branches]
@@ -114,6 +104,16 @@ def getInterpolatedSkeletonLookUp(stem: Branch, resolution: float):
     skeletonLookUp = KDTree(treeSkeletonPoints)
 
     return skeletonLookUp, treeSkeletonPoints, branches, skeletonBranchIndices, interpolationIndices
+
+
+def getSkeletonPointLookUp(stem: Branch):
+    branches = list(breadthFirstSearch(stem))
+    treeSkeletonPoints = [stem.skeletonPoints] + [b.skeletonPoints[1:] for b in branches[1:]]
+    treeSkeletonPoints = np.concatenate(treeSkeletonPoints, axis=0)
+
+    skeletonLookUp = KDTree(treeSkeletonPoints)
+
+    return skeletonLookUp, treeSkeletonPoints
 
 
 def generateSkeleton(tlsPoints: npt.NDArray[np.double], 

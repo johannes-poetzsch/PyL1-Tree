@@ -1,7 +1,7 @@
 from collections import deque
 from typing import Generator
 
-from ..objects.branch import Branch
+from src.objects.branch import Branch
 
 
 def breadthFirstSearch(stem: Branch, returnLeaves: bool = True) -> Generator[Branch, None, None]:

@@ -1,20 +1,19 @@
 import numpy as np
-import numpy.typing as npt
-from typing import Dict, Literal, Tuple
+from typing import Dict, Tuple
 
-from src.filterBranches import limitToRange
-from src.objects.branch import Branch
-from src.smoothBranches import removeBranchAnomalies
-from src.utils.branchUtils import generateSearchRanges, reassignPoints
+from filterBranches import limitToRange
+from objects.branch import Branch
+from smoothBranches import removeBranchAnomalies
+from utils.branchUtils import generateSearchRanges
 #from src.utils.geometry import angle, normalizeVectors
-from src.utils.iteration import breadthFirstSearch
+from utils.iteration import breadthFirstSearch
 
 
 def constructTreeModel(stem: Branch) -> Tuple[Dict[Branch, float], Dict[Branch, bool]]:
     branches = list(breadthFirstSearch(stem))
 
     removeBranchAnomalies(stem)
-    reassignPoints(list(breadthFirstSearch(stem)))
+    Branch.reassignPoints(list(breadthFirstSearch(stem)))
 
     searchRanges = generateSearchRanges(list(breadthFirstSearch(stem)), useMedianForStem=False, useTrimming=True)
     limitToRange(branches, searchRanges)

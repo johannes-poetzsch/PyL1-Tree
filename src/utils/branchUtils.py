@@ -1,12 +1,10 @@
 import cupy as cp
-from itertools import repeat
 import networkx as nx
 import numpy as np
 import numpy.typing as npt
-from scipy.spatial import KDTree
 from typing import List, Optional
 
-from ..objects.branch import Branch
+from src.objects.branch import Branch
 
 
 def buildSubtreeFromGraph(skeletonGraph: nx.DiGraph,
@@ -75,39 +73,3 @@ def generateSearchRanges(branches: List[Branch], # have to be semi-ordered by di
 
         searchRanges.append(searchRange)
         searchRangeLookUp[branch] = searchRange
-
-
-def findCloseBranches(points: npt.NDArray[np.double],
-                      branches: List[Branch]) -> npt.NDArray[int]:
-    skeletonPoints = np.concatenate([b.skeletonPoints for b in branches], axis=0)
-    branchIds = np.arange(len(branches), dtype=int).repeat([len(b.skeletonPoints) for b in branches])
-
-    lookUp = KDTree(skeletonPoints)
-
-    _, closestIndices = lookUp.query(points, k=1)
-    closeBranchIndices = branchIds[closestIndices]
-
-    return closeBranchIndices
-
-
-def reassignPoints(branches: List[Branch],
-                   unassignedTlsPoints: Optional[npt.NDArray[np.double]] = None,
-                   changedBranches: Optional[List[Branch]] = None,
-                   originalDistances: Optional[List[npt.NDArray[np.double]]] = None,
-                   useTrimming: bool = True
-                   ) -> npt.NDArray[np.double]:
-    changedBranches = branches if changedBranches is None else changedBranches
-    originalDistances = repeat(None) if originalDistances is None else originalDistances
-    prunedTlsPoints = []
-
-    for branch, od in zip(changedBranches, originalDistances):
-        tlsPoints = branch.tlsPoints
-        branch.tlsPoints = np.empty([0,3], dtype=np.double)
-        prunedTlsPoints.append(Branch.assignLocalPoints(tlsPoints, branches, closeBranches=[branch],
-                                                        originalDistances=od,
-                                                        useTrimming=useTrimming))
-
-    if unassignedTlsPoints is not None:
-        prunedTlsPoints.append(Branch.assignAllPoints(unassignedTlsPoints, branches, useTrimming=True))
-
-    return np.concatenate(prunedTlsPoints, axis=0)
