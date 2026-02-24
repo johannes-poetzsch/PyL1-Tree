@@ -8,9 +8,9 @@ import torch
 from itertools import combinations
 from typing import Dict, List, Optional, Tuple
 
-from objects.branch import Branch
-from utils.geometry import linesPointsDistances, normalizeVectors, angle
-from utils.iteration import breadthFirstSearch
+from src.objects.branch import Branch
+from src.utils.geometry import linesPointsDistances, normalizeVectors, angle
+from src.utils.iteration import breadthFirstSearch
 #from src.utils.kernels import cum_min
 
 

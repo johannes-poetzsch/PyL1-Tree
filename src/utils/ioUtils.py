@@ -1,7 +1,7 @@
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 from src.objects.branch import Branch
 from src.utils.iteration import breadthFirstSearch
@@ -58,7 +58,7 @@ def exportModel(stem: Branch,
         tlsData.to_csv(outputPath + "_tlsPoints", index=False)
 
 
-def importModel(inputPath: str) -> Optional[Branch, npt.NDArray[np.double]]:
+def importModel(inputPath: str) -> Tuple[Branch, Optional[npt.NDArray[np.double]]]:
     stem = None
     unassignedTlsPoints = None
     branches = {}

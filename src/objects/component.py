@@ -4,21 +4,27 @@ import numpy.typing as npt
 from scipy.spatial import KDTree
 from typing import Iterable, List, Optional, Set, Tuple
 
-from branch import Branch
+from src.objects.branch import Branch
 from src.utils.geometry import angle, normalizeVectors
 
 
 class Component:
-    def __init__(self, branches: Iterable[Branch]):
+    def __init__(self, branches: List[Branch]):
         self.branches = branches
         self.directionData = {}
         self.boundingBoxMin = np.min(np.stack([b.boundingBoxMin for b in branches]), axis=0)
         self.boundingBoxMax = np.max(np.stack([b.boundingBoxMax for b in branches]), axis=0)
 
 
-    def getBoundingBoxDistance(self, other: Component | Branch):
-        delta1 = np.clip(self.boundingBoxMin - other.boundingBoxMax, a_min=0, a_max=None)
-        delta2 = np.clip(other.boundingBoxMin - self.boundingBoxMax, a_min=0, a_max=None)
+    def getBoundingBoxDistance(self, other: Component | Branch | npt.NDArray[np.double]) -> float:
+        if isinstance(other, Branch) or isinstance(other, Component):
+            otherMax = other.boundingBoxMax
+            otherMin = other.boundingBoxMin
+        else:
+            otherMax = other
+            otherMin = other
+        delta1 = np.clip(self.boundingBoxMin - otherMax, a_min=0, a_max=None)
+        delta2 = np.clip(otherMin - self.boundingBoxMax, a_min=0, a_max=None)
         return np.linalg.norm(delta1 + delta2, axis=-1)
 
 
@@ -40,13 +46,12 @@ class Component:
         defaultSearchRange = np.quantile(allDistances, 0.9, axis=0, method='hazen')
 
         for branch, distance in zip(self.branches, distances):
-            searchRange = np.quantile(distance, 0.9, axis=0, method='hazen') if len(
-                distance) > 0 else defaultSearchRange
+            searchRange = np.quantile(distance, 0.9, axis=0, method='hazen') if len(distance) > 0 else defaultSearchRange
             searchRanges.append(searchRange)
+            pointIndices = tlsPointLookUp.query_ball_point(branch.skeletonPoints, searchRange)
+            componentPointIndices.extend([np.array(indices, dtype=np.intp) for indices in pointIndices])
 
-            componentPointIndices.extend(tlsPointLookUp.query_ball_point(branch.skeletonPoints, searchRange))
-
-        componentPointIndices = np.array(componentPointIndices).flatten()
+        componentPointIndices = np.concatenate(componentPointIndices)
         componentPointIndices = np.unique(componentPointIndices)
         componentPoints = tlsPointLookUp.data[componentPointIndices]
         return componentPoints, searchRanges
@@ -62,7 +67,7 @@ class Component:
                            branch: Branch,
                            minDistanceThreshold: float) -> bool | npt.NDArray[bool]:
         return (branch.isEndPoint(idx_1) & branch.isEndPoint(idx_2) &
-                np.linalg.norm(branch.skeletonPoints[idx_1] - branch.skeletonPoints[idx_2]) <= minDistanceThreshold)
+                (np.linalg.norm(branch.skeletonPoints[idx_1] - branch.skeletonPoints[idx_2]) <= minDistanceThreshold))
 
 
     @staticmethod
@@ -87,7 +92,7 @@ class Component:
 
         nextIdx = endIdx + orientation
         # direction at start of branch
-        if (nextIdx != endIdx and
+        if (nextIdx < endIdx and
                 not Component.directionIsIgnored(nextIdx, idx, branch, minDistanceThreshold)):
             directions.append(normalizeVectors(branch.skeletonPoints[nextIdx] - branch.skeletonPoints[idx]))
 
@@ -125,7 +130,7 @@ class ConnectedComponent(Component):
         prePointDirections = Component.getDirections(maxIdx, -1, branch, minDistanceThreshold)
         postPointDirections = []
         for child in branch.children:
-            postPointDirections.append(Component.getDirections(0, 1, child, minDistanceThreshold))
+            postPointDirections.extend(Component.getDirections(0, 1, child, minDistanceThreshold))
 
         prePointDirections = np.stack(prePointDirections) if len(prePointDirections) > 0 else None
         postPointDirections = np.stack(postPointDirections) if len(postPointDirections) > 0 else None
@@ -133,41 +138,42 @@ class ConnectedComponent(Component):
 
 
 class UnconnectedComponent(Component):
-    def __init__(self, branches: Set[Branch]):
+    def __init__(self, branches: List[Branch]):
         Component.__init__(self, branches)
-        self.possibleConnections: Optional[List[Tuple[float, Branch, int, Branch, int]]] = None
+        self.possibleConnections: List[Tuple[float, Branch, int, Branch, int]] = []
         self.directionData = {}
 
 
-    def connect(self, resolution: float) -> Tuple[ConnectedComponent, Branch]:
-        if len(self.possibleConnections):
+    def connect(self, resolution: float) -> Tuple[ConnectedComponent, Branch, Optional[Branch]]:
+        if len(self.possibleConnections) == 0:
             raise ValueError("Components can not be connected.")
         score, startBranch, startIdx, endBranch, endIdx = self.possibleConnections[0]
         startPoint = startBranch.skeletonPoints[startIdx]
         endPoint = endBranch.skeletonPoints[endIdx]
         connectionLength = np.linalg.norm(endPoint - startPoint)
 
-        pointNumber = 2 + np.floor(connectionLength / resolution)
+        pointNumber = int(2 + np.floor(connectionLength / resolution))
         skeletonPoints = np.linspace(startPoint, endPoint, pointNumber, endpoint=True)
         tlsPoints = np.empty((0, 3), dtype=np.double)
 
-        parent = startBranch.split(startIdx)
+        parent, sibling = startBranch.split(startIdx) # TODO: Save splitEnd in branches
 
         connectionBranch = Branch(skeletonPoints, tlsPoints, parent)
 
-        childBranch = endBranch.split(endIdx)
+        childBranch, _ = endBranch.split(endIdx)
         if childBranch is None:  # connection end point is root point of the component
             endBranch.setParent(connectionBranch)
         else:
             childBranch.reorientSubtree(connectionBranch)
 
-        connectedComponent = ConnectedComponent(list(self.branches) + [connectionBranch])
+        connectedComponent = ConnectedComponent(self.branches + [connectionBranch])
 
-        return connectedComponent, connectionBranch
+        return connectedComponent, connectionBranch, sibling
 
 
     def generateDirectionData(self, branch: Branch, minDistanceThreshold: float):
         self.directionData[branch] = []
+        # TODO: refactor lookup
         endPointIndices = np.flatnonzero(branch.isEndPoint(np.arange(len(branch.skeletonPoints), dtype=int)))
 
         for i, idx in enumerate(endPointIndices):
@@ -192,19 +198,17 @@ class UnconnectedComponent(Component):
                                   newBranch: Branch,
                                   minAngleThreshold: float,
                                   minDistanceThreshold: float):
-        if newBranch.parent not in self.branches:
-            return
-
         def updateConnection(connection: Tuple[float, Branch, int, Branch, int]
                              ) -> Tuple[float, Branch, int, Branch, int]:
             score, startBranch, startIdx, endBranch, endIdx = connection
-            branchBranchLength = len(startBranch.skeletonPoints)
-            if newBranch.parent is not startBranch or startIdx < branchBranchLength:
+            startBranchLength = len(startBranch.skeletonPoints)
+            if newBranch.parent is not startBranch or startIdx < startBranchLength:
                 return connection
-            for newStartBranch in startBranch.children:
-                if newStartBranch is not newBranch:
-                    return score, newStartBranch, startIdx - branchBranchLength + 1, endBranch, endIdx
-            raise ValueError("Connection between branch and startBranch not found.")
+            else:
+                for newStartBranch in startBranch.children:
+                    if newStartBranch is not newBranch:
+                        return score, newStartBranch, startIdx - startBranchLength + 1, endBranch, endIdx
+                raise ValueError("Connection between branch and startBranch not found.")
 
         def connectionStaysCredible(connection: Tuple[float, Branch, int, Branch, int]) -> bool:
             _, startBranch, startIdx, endBranch, endIdx = connection

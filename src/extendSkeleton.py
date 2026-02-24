@@ -7,10 +7,10 @@ from scipy.spatial import KDTree
 from sklearn.cluster import dbscan, k_means
 from typing import Dict, List, Optional
 
-from objects.branch import Branch
-from utils.branchUtils import buildSubtreeFromGraph
-from utils.geometry import angle, normalizeVectors
-from utils.iteration import breadthFirstSearch
+from src.objects.branch import Branch
+from src.utils.branchUtils import buildSubtreeFromGraph
+from src.utils.geometry import angle, normalizeVectors
+from src.utils.iteration import breadthFirstSearch
 
 
 def extendSkeleton(stem: Branch, 
@@ -165,14 +165,14 @@ def connectSkeleton(skeleton: List[Branch],
                     junctionPoint: npt.NDArray[np.double],
                     junctionBranch: Branch,
                     junctionIdx: int,
-                    isInterpolation: bool
+                    isInterpolation: bool = False
                     ) -> Branch:
     if isInterpolation:
         junctionIdx += 1
         junctionBranch.skeletonPoints = np.insert(junctionBranch.skeletonPoints, junctionIdx, junctionPoint, axis=0)
         junctionBranch.updateSkeletonMeasurements()
 
-    junctionBranch = junctionBranch.split(junctionIdx)
+    junctionBranch, _ = junctionBranch.split(junctionIdx)
 
     rootPoint = skeleton[0].skeletonPoints[0]
     connectionBranch = Branch(skeletonPoints=np.stack([junctionPoint, rootPoint]), parent=junctionBranch)

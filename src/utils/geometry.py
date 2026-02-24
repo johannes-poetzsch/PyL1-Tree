@@ -97,7 +97,7 @@ def stripPointsDistances(strip: npt.NDArray, # (L+1,D)
 
     segmentDistances: npt.NDArray = xp.linalg.norm(pedalPoints - points, axis=-1) # (L,N)
     closestSegment = segmentDistances.argmin(axis=0) # (N)
-    distances: npt.NDArray[np.double] = segmentDistances[closestSegment]
+    distances: npt.NDArray[np.double] = np.take_along_axis(segmentDistances, closestSegment[np.newaxis], axis=0).squeeze(0)
 
     trimmed = np.zeros_like(distances, dtype=bool)
 
@@ -109,8 +109,8 @@ def stripPointsDistances(strip: npt.NDArray, # (L+1,D)
 
     untrimmed = ~trimmed
     if returnPedalInfo:
-        pedalPoints = pedalPoints[closestSegment]
-        atStartPoint = tMatrix[closestSegment] < 0.5
+        pedalPoints = np.take_along_axis(pedalPoints, np.expand_dims(closestSegment, axis=(0,2)), axis=0).squeeze(0)
+        atStartPoint = np.take_along_axis(tMatrix, closestSegment[np.newaxis], axis=0).squeeze(0) < 0.5
         closestPointIndices = np.where(atStartPoint, closestSegment, closestSegment+1)
         if returnTrimming:
             return distances, pedalPoints, closestPointIndices, trimmed

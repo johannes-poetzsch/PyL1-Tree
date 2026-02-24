@@ -1,15 +1,15 @@
 import numpy as np
 import yaml
 
-from src.L1MedianAlgorithm.generateSeeds import generateSeeds
-from src.L1MedianAlgorithm.generateBranches import generateBranches
 from src.adjustBifurcations import adjustBifurcations
 from src.constructTreeGraph import constructTreeGraph
 from src.constructTreeModel import constructTreeModel
-from src.exportModel import exportModel
 from src.extendSkeleton import extendSkeleton
 from src.filterBranches import filterTreeBranches
+from src.L1MedianAlgorithm.generateSeeds import generateSeeds
+from src.L1MedianAlgorithm.generateBranches import generateBranches
 from src.smoothBranches import smoothBranches
+from src.utils.ioUtils import exportModel
 
 
 def main():

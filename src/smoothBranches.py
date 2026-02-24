@@ -4,12 +4,12 @@ from scipy.spatial import KDTree
 
 from typing import Dict
 
-from objects.branch import Branch
 from src.filterBranches import limitToRange
-from utils.branchUtils import generateSearchRanges
-from utils.geometry import getStripAngles, normalizeVectors, stripPointsDistances
-from utils.iteration import breadthFirstSearch
-from utils.pointMetrics import calculateDensity
+from src.objects.branch import Branch
+from src.utils.branchUtils import generateSearchRanges
+from src.utils.geometry import getStripAngles, normalizeVectors, stripPointsDistances
+from src.utils.iteration import breadthFirstSearch
+from src.utils.pointMetrics import calculateDensity
 
 
 def smoothBranches(stem: Branch,

@@ -6,13 +6,13 @@ from typing import Any, Dict, List, Tuple
 
 from scipy.spatial import KDTree
 
-from connectComponents import connectComponents
-from filterBranches import (filterTreeBranches, filterByInfluence, limitToRange,
-                            pruneThickeningLeaves, pruneUncenteredBranches)
-from objects.branch import Branch
+from src.connectComponents import connectComponents
+from src.filterBranches import (filterTreeBranches, filterByInfluence, limitToRange,
+                                pruneThickeningLeaves, pruneUncenteredBranches)
+from src.objects.branch import Branch
 from src.utils.geometry import angle, normalizeVectors
-from utils.branchUtils import buildSubtreeFromGraph
-from utils.iteration import breadthFirstSearch
+from src.utils.branchUtils import buildSubtreeFromGraph
+from src.utils.iteration import breadthFirstSearch
 
 
 def constructTreeGraph(tlsPoints: npt.NDArray[np.double],
@@ -94,7 +94,6 @@ def createSkeletonGraph(branches: List[Branch],
     return skeletonGraph
 
 
-
 def constructComponents(branches: List[Branch],
                         minDistanceThreshold: float,
                         heightAttribute: int = 2) -> List[Branch]:
@@ -124,7 +123,6 @@ def constructComponents(branches: List[Branch],
     return componentStems
 
 
-
 def preFilterBranches(branches: List[Branch],
                       baseRadius: float
                       ) -> Tuple[List[Branch], npt.NDArray[np.double]]:
@@ -136,7 +134,9 @@ def preFilterBranches(branches: List[Branch],
     branches.sort(key=lambda b: b.length, reverse=True)
 
     branchTlsDistances = [b.getDistances(b.tlsPoints) for b in branches]
-    searchRanges = np.array([np.quantile(d, 0.9, method="hazen") for d in branchTlsDistances])
+
+    searchRanges = np.array([np.quantile(d, 0.9, method="hazen") if len(d) > 0 else 0.0
+                             for d in branchTlsDistances])
     filterByInfluence(branches, searchRanges=np.minimum(searchRanges, baseRadius))
 
     branches = [b for b in branches if not b.isRemoved]

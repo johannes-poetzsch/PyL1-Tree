@@ -1,12 +1,12 @@
 import numpy as np
 from typing import Dict, Tuple
 
-from filterBranches import limitToRange
-from objects.branch import Branch
-from smoothBranches import removeBranchAnomalies
-from utils.branchUtils import generateSearchRanges
+from src.filterBranches import limitToRange
+from src.objects.branch import Branch
+from src.smoothBranches import removeBranchAnomalies
+from src.utils.branchUtils import generateSearchRanges
 #from src.utils.geometry import angle, normalizeVectors
-from utils.iteration import breadthFirstSearch
+from src.utils.iteration import breadthFirstSearch
 
 
 def constructTreeModel(stem: Branch) -> Tuple[Dict[Branch, float], Dict[Branch, bool]]:

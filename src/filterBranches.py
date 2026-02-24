@@ -3,10 +3,10 @@ import numpy.typing as npt
 from itertools import repeat
 from typing import Iterable, List, Optional
 
-from objects.branch import Branch
-from utils.branchUtils import generateSearchRanges
-from utils.geometry import angle, distanceAlongDirection, movingTTest, normalizeVectors, stripPointsDistances
-from utils.iteration import breadthFirstSearch
+from src.objects.branch import Branch
+from src.utils.branchUtils import generateSearchRanges
+from src.utils.geometry import angle, distanceAlongDirection, movingTTest, normalizeVectors, stripPointsDistances
+from src.utils.iteration import breadthFirstSearch
 
 
 def filterTreeBranches(stem: Branch,
@@ -49,7 +49,7 @@ def filterByLength(branches: List[Branch],
             removedPoints = branch.remove()
             trimmedPoints.append(Branch.assignLocalPoints(removedPoints, branches, closeBranches, useTrimming=True))
 
-    return np.concatenate(trimmedPoints, axis=0)
+    return np.concatenate(trimmedPoints, axis=0) if len(trimmedPoints) > 0 else np.empty((0,3), dtype=np.double)
 
 
 def filterByInfluence(branches: List[Branch],
@@ -76,7 +76,7 @@ def filterByInfluence(branches: List[Branch],
                 closeBranches = [branch, leaf.parent]
                 trimmedPoints.append(Branch.assignLocalPoints(removedPoints, branches, closeBranches, useTrimming=True))
 
-    return np.concatenate(trimmedPoints, axis=0)
+    return np.concatenate(trimmedPoints, axis=0) if len(trimmedPoints) > 0 else np.empty((0,3), dtype=np.double)
 
 
 def limitToRange(branches: Iterable[Branch],
@@ -98,7 +98,7 @@ def limitToRange(branches: Iterable[Branch],
         prunedPoints.append(branch.tlsPoints[~isInRange])
         branch.tlsPoints = branch.tlsPoints[isInRange]
 
-    return np.concatenate(prunedPoints, axis=0)
+    return np.concatenate(prunedPoints, axis=0) if len(prunedPoints) > 0 else np.empty((0,3), dtype=np.double)
 
 
 def pruneByAngle(branches: List[Branch],
@@ -152,10 +152,10 @@ def pruneLeafEnds(branches: List[Branch]) -> List[Branch]:
         if not angleBeforeEnd + angleAtEnd > 150:
             continue
         else:
-            branch.split(pruneIdx)
-            child = next(iter(branch.children))
-            child.remove()
-            prunedBranches.append(child)
+            _, prunedEnd = branch.split(pruneIdx)
+            if prunedEnd is not None:
+                prunedEnd.remove()
+                prunedBranches.append(prunedEnd)
 
     return prunedBranches
 
@@ -171,11 +171,11 @@ def pruneThickeningLeaves(branches: List[Branch], branchSizeThreshold: int) -> n
         order = np.argsort(closestPointIndices)
         tlsPoints = leaf.tlsPoints[order]
         closestPointIndices = closestPointIndices[order]
-
+        # TODO: test and fix this
         skeletonIndices, indices, counts = np.unique(closestPointIndices, return_index=True, return_counts=True)
 
         segmentRadii = np.full(len(leaf.skeletonPoints), np.nan, dtype=np.double)
-        for skeletonIdx, idx, count in (skeletonIndices, indices, counts):
+        for skeletonIdx, idx, count in zip(skeletonIndices, indices, counts):
             skeletonPoint = leaf.skeletonPoints[idx]
             segmentPoints = tlsPoints[idx:idx + count]
             if skeletonIdx == len(leaf.skeletonPoints) - 1:
@@ -192,11 +192,11 @@ def pruneThickeningLeaves(branches: List[Branch], branchSizeThreshold: int) -> n
         if breakIdx is None or breakIdx < branchSizeThreshold:
             continue
 
-        leaf = leaf.split(breakIdx)
-        prunedBranchEnd = next(iter(leaf.children))
-        prunedPoints.append(prunedBranchEnd.remove())
+        leaf, prunedEnd = leaf.split(breakIdx)
+        if prunedEnd is not None:
+            prunedPoints.append(prunedEnd.remove())
 
-    return np.concatenate(prunedPoints, axis=0)
+    return np.concatenate(prunedPoints, axis=0) if len(prunedPoints) > 0 else np.empty((0,3), dtype=np.double)
 
 
 def pruneUncenteredBranches(branches: List[Branch]) -> List[Branch]:

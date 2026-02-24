@@ -21,7 +21,6 @@ class Branch:
         self.skeletonPoints = skeletonPoints
         self.endPointIndices: Optional[List[int]] = None
         self.tlsPoints = np.empty([0,3], dtype=np.double) if tlsPoints is None else tlsPoints
-        self.onGPU = cp.get_array_module(skeletonPoints, tlsPoints)
         self.children: set[Branch] = set()
 
         self.parent: Optional[Branch] = None
@@ -60,14 +59,14 @@ class Branch:
 
     def addEndPoints(self, endPointIndices: Iterable[int]):
         if self.endPointIndices is None:
-            self.endPointIndices =  [0, len(self.skeletonPoints) - 1]
+            self.endPointIndices = [0, len(self.skeletonPoints) - 1]
         self.endPointIndices += list(endPointIndices)
 
 
     def isEndPoint(self, idx: int | npt.NDArray[int]) -> bool | npt.NDArray[bool]:
         idx = idx % len(self.skeletonPoints)
         if self.endPointIndices is None:
-            return idx == 0 | idx == len(self.skeletonPoints) - 1
+            return (idx == 0) | (idx == len(self.skeletonPoints) - 1)
         else:
             return np.isin(idx, self.endPointIndices)
 
@@ -185,14 +184,14 @@ class Branch:
                 child.updateSkeletonMeasurements()
             child.setParent(parent)
 
-        if adjustConnectedBranches and len(parent.children) == 1:
-            self.parent.expand()
+        if adjustConnectedBranches and not parent is None and len(parent.children) == 1:
+            parent.expand()
 
         return self.tlsPoints
 
 
     def reorientSubtree(self, newParent: Branch):
-        for child in self.children:
+        for child in list(self.children):
             if child is not newParent:
                 child.setParent(newParent)
 
@@ -206,13 +205,13 @@ class Branch:
 
 
     # returns branch that ends at splitIdx.
-    def split(self, splitIdx: int | np.intp) -> Branch:
+    def split(self, splitIdx: int | np.intp) -> Tuple[Branch, Optional[Branch]]:
         splitIdx = splitIdx % len(self.skeletonPoints)
 
         if splitIdx == 0:
-            return self.parent
+            return self.parent, self
         if splitIdx == len(self.skeletonPoints) - 1:
-            return self
+            return self, None
 
         splitEnd = Branch(self.skeletonPoints[splitIdx:], parent=self)
 
@@ -230,11 +229,11 @@ class Branch:
                 if idx < splitIdx:
                     self.addEndPoints([idx])
                 else:
-                    splitEnd.addEndPoints([idx])
+                    splitEnd.addEndPoints([idx - splitIdx])
 
         self.updateSkeletonMeasurements()
 
-        return self
+        return self, splitEnd
 
 
     @staticmethod
@@ -331,14 +330,14 @@ class Branch:
                 continue
 
             if useTrimming:
-                dist, trimmed = branch.getDistances(points, trimStart=branch.isStem(), trimEnd=branch.isLeaf(),
-                                                    returnTrimming=True)
+                newDistances, trimmed = branch.getDistances(points, trimStart=branch.isStem(), trimEnd=branch.isLeaf(),
+                                                            returnTrimming=True)
             else:
-                dist = branch.getDistances(points)
-            improved = dist < distances
+                newDistances = branch.getDistances(points)
+            improved = newDistances < distances
 
             if xp.count_nonzero(improved) > 0:
-                distances[improved] = dist[improved]
+                distances[improved] = newDistances[improved]
                 maxDistance = distances.max()
 
                 if branch.isRemoved:
@@ -404,6 +403,8 @@ class Branch:
 
         for branch, od in zip(changedBranches, originalDistances):
             tlsPoints = branch.tlsPoints
+            if len(tlsPoints) == 0:
+                continue
             branch.tlsPoints = np.empty([0,3], dtype=np.double)
             prunedTlsPoints.append(Branch.assignLocalPoints(tlsPoints, branches, closeBranches=[branch],
                                                             originalDistances=od,

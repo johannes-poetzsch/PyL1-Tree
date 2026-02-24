@@ -2,12 +2,12 @@ from itertools import chain
 import numpy as np
 import numpy.typing as npt
 from scipy.spatial import KDTree
-from typing import List, Optional, Tuple
+from typing import List, Optional, Set, Tuple
 
-from objects.branch import Branch
-from objects.component import ConnectedComponent, UnconnectedComponent
-from utils.iteration import breadthFirstSearch
-from utils.geometry import angle, normalizeVectors, stripPointsDistances
+from src.objects.branch import Branch
+from src.objects.component import ConnectedComponent, UnconnectedComponent
+from src.utils.iteration import breadthFirstSearch
+from src.utils.geometry import angle, normalizeVectors, stripPointsDistances
 
 
 def connectComponents(rootComponentStem: Branch,
@@ -22,8 +22,8 @@ def connectComponents(rootComponentStem: Branch,
                       densityFactor: float
                       ) -> Tuple[Branch, List[Branch], npt.NDArray[np.double]]:
     rootComponent = ConnectedComponent(list(breadthFirstSearch(rootComponentStem)))
-    unconnectedComponents = [UnconnectedComponent(set(breadthFirstSearch(stem)))
-                             for stem in unconnectedComponentStems if stem is not rootComponentStem]
+    unconnectedComponents = {UnconnectedComponent(list(breadthFirstSearch(stem)))
+                             for stem in unconnectedComponentStems if stem is not rootComponentStem}
 
     originalComponentCount = len(unconnectedComponents) + 1
 
@@ -37,7 +37,9 @@ def connectComponents(rootComponentStem: Branch,
 
     originalMaxDistanceThreshold = maxDistanceThreshold
     maxCheckedDistance = 0.0
+    maxDistanceCap = 2.0
     currentComponent: ConnectedComponent = rootComponent
+    connectionBranches = set()
 
     while unconnectedComponents:
         currentPoints, searchRanges = currentComponent.getPoints(assignedPointsLookUp)
@@ -57,27 +59,37 @@ def connectComponents(rootComponentStem: Branch,
         if len(connectableComponents) > 0:
             connectionComponent = max(connectableComponents, key=lambda c: c.possibleConnections[0])
 
-            del(unconnectedComponents[unconnectedComponents.index(connectionComponent)])
-            currentComponent, connectionBranch = connectionComponent.connect(resolution)
+            unconnectedComponents.remove(connectionComponent)
+            currentComponent, connectionBranch, splitEnd = connectionComponent.connect(resolution)
 
+            connectionBranches.add((connectionBranch, len(connectionBranch.skeletonPoints)))
+
+            if splitEnd is not None:
+                rootComponent.branches.append(splitEnd)
+                splitBranch = splitEnd.parent
+                if splitBranch in rootComponent.directionData:
+                    del rootComponent.directionData[splitBranch]
+
+            connectionPoint = connectionBranch.skeletonPoints[0]
             for component in unconnectedComponents:
-                if component.getBoundingBoxDistance(currentComponent) == 0:
+                if component.getBoundingBoxDistance(connectionPoint) <= maxDistanceCap:
                     component.updatePossibleConnections(connectionBranch, minAngleThreshold, minDistanceThreshold)
 
             maxDistanceThreshold = originalMaxDistanceThreshold
             maxCheckedDistance = 0.0
         else:
-            if maxDistanceThreshold >= 2.0 or len(unconnectedComponents) <= originalComponentCount / 10:
+            if maxDistanceThreshold >= maxDistanceCap or len(unconnectedComponents) <= originalComponentCount / 10:
                 break
             currentComponent = rootComponent
             maxCheckedDistance = maxDistanceThreshold
             maxDistanceThreshold += 0.2
 
+    revertInterpolation(connectionBranches)
     for branch in rootComponent.branches:
         if len(branch.children) == 1:
             branch.expand()
 
-    trimmedPoints1 = Branch.reassignPoints(list(rootComponent.branches), useTrimming=True)
+    trimmedPoints1 = Branch.reassignPoints(rootComponent.branches, useTrimming=True)
     allBranches = list(chain(rootComponent.branches,
                              chain.from_iterable([c.branches for c in unconnectedComponents])))
     trimmedPoints2 = Branch.assignAllPoints(unassignedPoints, allBranches, useTrimming=True)
@@ -165,8 +177,8 @@ def scoreConnection(startBranch: Branch,
 
     midPoint = startPoint + 0.5*connectionVector
     searchRadius = 0.5*connectionLength + 2*searchRange
-    closeRootPoints = rootPointsLookUp.query_ball_point(midPoint, searchRadius)
-    closeUnassignedPoints = unassignedPointsLookUp.query_ball_point(midPoint, searchRadius)
+    closeRootPoints = rootPointsLookUp.data[rootPointsLookUp.query_ball_point(midPoint, searchRadius)]
+    closeUnassignedPoints = unassignedPointsLookUp.data[unassignedPointsLookUp.query_ball_point(midPoint, searchRadius)]
     closePoints = np.concatenate((closeRootPoints, closeUnassignedPoints), axis=0)
 
     _, branchDistances = Branch.findLocalClosestBranches(closePoints, allBranches,
@@ -175,7 +187,7 @@ def scoreConnection(startBranch: Branch,
     pedalDistances, pedalPoints, _ = stripPointsDistances(np.stack((startPoint, endPoint)), closePoints,
                                                           returnPedalInfo=True)
 
-    pointIsAtConnection = pedalDistances < branchDistances & pedalDistances < 2 * searchRange
+    pointIsAtConnection = (pedalDistances < branchDistances) & (pedalDistances < 2 * searchRange)
     connectionPoints = closePoints[pointIsAtConnection]
     pedalPoints = pedalPoints[pointIsAtConnection]
     pedalDistances = pedalDistances[pointIsAtConnection]
@@ -229,12 +241,12 @@ def isConnectionDensityCredible(startPoint: npt.NDArray[np.double],
                                 densityFactor: float) -> bool:
     vector = endPoint - startPoint
     length = np.linalg.norm(vector)
-    pointsPerWindow = len(pedalPoints) / length * densityFactor * windowSize
+    pointsPerWindow = int(np.ceil(len(pedalPoints) / length * densityFactor * windowSize))
 
     relativeWindowSize = windowSize / length
     mainAxis = vector.argmax()
 
-    projectedPedalPoints = pedalPoints[mainAxis]
+    projectedPedalPoints = pedalPoints[:,mainAxis]
     maxProjectedWindowSize = relativeWindowSize * vector[mainAxis]
 
     projectedPedalPoints = np.append(projectedPedalPoints, (startPoint[mainAxis], endPoint[mainAxis]), axis=0)
@@ -244,3 +256,16 @@ def isConnectionDensityCredible(startPoint: npt.NDArray[np.double],
 
     isCredible = np.all(projectedWindowSizes <= maxProjectedWindowSize)
     return isCredible
+
+
+def revertInterpolation(connectionBranches: Set[Branch]):
+    for branch, remainingPointCount in connectionBranches:
+        while remainingPointCount > 1:
+            remainingPointCount -= len(branch.skeletonPoints - 1)
+            branch.skeletonPoints = branch.skeletonPoints[[0, -1]]
+
+            # if the branch was split by another connection, find the split end of the branch
+            if remainingPointCount > 1:
+                for c in branch.children:
+                    if c not in connectionBranches:
+                        branch = c

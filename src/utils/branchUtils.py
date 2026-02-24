@@ -31,8 +31,9 @@ def buildSubtreeFromGraph(skeletonGraph: nx.DiGraph,
 
     branch = Branch(skeletonPoints[pointIndices], parent=parent)
 
+    pointIndices = np.array(pointIndices, dtype=int)
     if isEndPoint is not None:
-        endPointIndices = pointIndices[isEndPoint[pointIndices]]
+        endPointIndices = np.flatnonzero(isEndPoint[pointIndices])
         if len(endPointIndices) > 2:
             branch.addEndPoints(endPointIndices[1:-1])
 
@@ -73,3 +74,5 @@ def generateSearchRanges(branches: List[Branch], # have to be semi-ordered by di
 
         searchRanges.append(searchRange)
         searchRangeLookUp[branch] = searchRange
+
+    return searchRanges
