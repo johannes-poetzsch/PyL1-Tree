@@ -32,6 +32,7 @@ def connectComponents(rootComponentStem: Branch,
     assignedPoints = np.concatenate([b.tlsPoints for b in allBranches], axis=0)
     assignedPointsLookUp = KDTree(assignedPoints)
     unassignedPointsLookUp = KDTree(unassignedPoints)
+    unassignedPointsDistances = Branch.findMinBranchDistances(unassignedPoints, allBranches)
 
     rootComponent = ConnectedComponent(list(breadthFirstSearch(rootComponentStem)), assignedPointsLookUp)
     connectedComponents = {rootComponent}
@@ -46,7 +47,7 @@ def connectComponents(rootComponentStem: Branch,
                 for otherComponent in unconnectedComponents:
                     if component.getBoundingBoxDistance(otherComponent) <= maxDistanceThreshold:
                         findConnections(component, otherComponent, allBranches, unassignedPointsLookUp,
-                                        minDistanceThreshold, maxDistanceThreshold,
+                                        unassignedPointsDistances, minDistanceThreshold, maxDistanceThreshold,
                                         minAngleThreshold, maxAngleThreshold,
                                         windowSize, densityFactor)
 
@@ -101,6 +102,7 @@ def findConnections(connectedComponent: ConnectedComponent,
                     unconnectedComponent: UnconnectedComponent,
                     allBranches: List[Branch],
                     unassignedPointsLookUp: KDTree,
+                    unassignedPointsDistances: npt.NDArray[np.double],
                     minDistanceThreshold: float,
                     maxDistanceThreshold: float,
                     minAngleThreshold: float,
@@ -129,9 +131,9 @@ def findConnections(connectedComponent: ConnectedComponent,
                             connectionLength <= connectedComponent.checkedDistanceThreshold):
                         continue
 
-                    score = scoreConnection(startBranch, startIdx, endBranch, endIdx, searchRange,
+                    score = scoreConnection(startBranch, startIdx, endBranch, endIdx, connectedComponent, searchRange,
                                             startDirection, childDirections, parentDirections, siblingDirections,
-                                            allBranches, connectedComponent.tlsPointsLookUp, unassignedPointsLookUp,
+                                            allBranches, unassignedPointsLookUp, unassignedPointsDistances,
                                             minAngleThreshold, maxAngleThreshold, windowSize, densityFactor)
                     if score is not None:
                         connection = (score, startBranch, startIdx, endBranch, endIdx)
@@ -143,14 +145,15 @@ def scoreConnection(startBranch: Branch,
                     startIdx: int,
                     endBranch: Branch,
                     endIdx: int,
+                    rootComponent: ConnectedComponent,
                     searchRange: float,
                     startDirection: npt.NDArray[np.double],
                     childDirections: npt.NDArray[np.double],
                     parentDirections: npt.NDArray[np.double],
                     siblingDirections: npt.NDArray[np.double],
                     allBranches: List[Branch],
-                    rootPointsLookUp: KDTree,
                     unassignedPointsLookUp: KDTree,
+                    unassignedPointsDistances: npt.NDArray[np.double],
                     minAngleThreshold: float,
                     maxAngleThreshold: float,
                     windowSize: float,
@@ -169,20 +172,26 @@ def scoreConnection(startBranch: Branch,
 
     midPoint = startPoint + 0.5*connectionVector
     searchRadius = 0.5*connectionLength + 2*searchRange
-    closeRootPoints = rootPointsLookUp.data[rootPointsLookUp.query_ball_point(midPoint, searchRadius)]
-    closeUnassignedPoints = unassignedPointsLookUp.data[unassignedPointsLookUp.query_ball_point(midPoint, searchRadius)]
-    closePoints = np.concatenate((closeRootPoints, closeUnassignedPoints), axis=0)
 
-    _, branchDistances = Branch.findLocalClosestBranches(closePoints, allBranches,
-                                                         [startBranch, endBranch])
+    closeRootPointIndices = rootComponent.tlsPointsLookUp.query_ball_point(midPoint, searchRadius)
+    closeRootPoints = rootComponent.tlsPointsLookUp.data[closeRootPointIndices]
+    rootPedalDistances, rootPedalPoints, _ = stripPointsDistances(np.stack((startPoint, endPoint)), closeRootPoints,
+                                                                  returnPedalInfo=True)
+    rootPointIsAtConnection = rootPedalDistances < rootComponent.tlsDistances[closeRootPointIndices]
 
-    pedalDistances, pedalPoints, _ = stripPointsDistances(np.stack((startPoint, endPoint)), closePoints,
-                                                          returnPedalInfo=True)
+    closeUnassignedPointIndices = unassignedPointsLookUp.query_ball_point(midPoint, searchRadius)
+    closeUnassignedPoints = unassignedPointsLookUp.data[closeUnassignedPointIndices]
+    unassignedPedalDistances, unassignedPedalPoints, _ = stripPointsDistances(np.stack((startPoint, endPoint)),
+                                                                              closeUnassignedPoints,
+                                                                              returnPedalInfo=True)
+    unassignedPointIsAtConnection = unassignedPedalDistances < unassignedPointsDistances[closeUnassignedPointIndices]
 
-    pointIsAtConnection = (pedalDistances < branchDistances) & (pedalDistances < 2 * searchRange)
-    connectionPoints = closePoints[pointIsAtConnection]
-    pedalPoints = pedalPoints[pointIsAtConnection]
-    pedalDistances = pedalDistances[pointIsAtConnection]
+    connectionPoints = np.append(closeRootPoints[rootPointIsAtConnection],
+                                 closeUnassignedPoints[unassignedPointIsAtConnection], axis=0)
+    pedalPoints = np.append(rootPedalPoints[rootPointIsAtConnection],
+                            unassignedPedalPoints[unassignedPointIsAtConnection], axis=0)
+    pedalDistances = np.append(rootPedalDistances[rootPointIsAtConnection],
+                               unassignedPedalDistances[unassignedPointIsAtConnection], axis=0)
 
     if (len(connectionPoints) == 0 or
             not isConnectionDensityCredible(startPoint, endPoint, pedalPoints, windowSize, densityFactor)):

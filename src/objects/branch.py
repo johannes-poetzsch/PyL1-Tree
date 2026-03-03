@@ -391,6 +391,29 @@ class Branch:
 
 
     @staticmethod
+    def findMinBranchDistances(points: npt.NDArray[np.double],
+                               branches: List[Branch]
+                               ) -> npt.NDArray[np.double]:
+        closeBranchIndices = Branch.findCloseBranches(points, branches)
+
+        branchOrder = np.argsort(closeBranchIndices)
+        closeBranchIndices = closeBranchIndices[branchOrder]
+        points = points[branchOrder]
+
+        reverseBranchOrder = np.empty_like(branchOrder)
+        reverseBranchOrder[branchOrder] = np.arange(len(branchOrder))
+
+        branchIndices, indices, counts = np.unique(closeBranchIndices, return_index=True, return_counts=True)
+        minDistances = np.empty_like(closeBranchIndices, dtype=np.double)
+
+        for branchIdx, idx, pointCount in zip(branchIndices, indices, counts):
+            _, minDistances[idx:idx + pointCount] = Branch.findLocalClosestBranches(
+                points[idx:idx + pointCount], branches, [branches[branchIdx]], useTrimming=False)
+
+        return minDistances[reverseBranchOrder]
+
+
+    @staticmethod
     def reassignPoints(branches: List[Branch],
                        unassignedTlsPoints: Optional[npt.NDArray[np.double]] = None,
                        changedBranches: Optional[List[Branch]] = None,

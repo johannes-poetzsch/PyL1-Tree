@@ -105,6 +105,7 @@ class ConnectedComponent(Component):
         self.checkedDistanceThreshold = 0.0
         tlsPoints, self.searchRanges = self.getPoints(pointsLookUp)
         self.tlsPointsLookUp = KDTree(tlsPoints)
+        self.tlsDistances = Branch.findMinBranchDistances(tlsPoints, branches)
 
 
     def extend(self, subComponent: ConnectedComponent):
