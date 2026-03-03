@@ -18,10 +18,13 @@ def main():
     with open("parameters.yaml") as config:
         parameters = yaml.safe_load(config)["parameters"]
 
-    tlsPoints = np.unique(tlsPoints, axis=0)
-    parameters["heightAttributeIdx"] = 2 # TODO: ensure height attribute is Z, reorder otherwise
-    tlsPoints = tlsPoints[np.argsort(tlsPoints[:, parameters["heightAttributeIdx"]])]
-    seedPoints, relPathPositions = generateSeeds(tlsPoints, parameters)
+    if parameters["heightAttributeIdx"] != 2:
+        h = parameters["heightAttributeIdx"]
+        height = tlsPoints[:,h].copy()
+        tlsPoints[:,h] = tlsPoints[:,2]
+        tlsPoints[:,2] = height
+
+    seedPoints, relPathPositions, tlsPoints = generateSeeds(tlsPoints, parameters)
     branches = generateBranches(tlsPoints, seedPoints, relPathPositions, parameters)
     stem, prunedTlsPoints1 = constructTreeGraph(tlsPoints, branches, parameters)
 

@@ -9,6 +9,10 @@ from typing import Any, Dict, Tuple
 
 def generateSeeds(tlsPoints: npt.NDArray[np.double], # must be sorted by height and tlsPoints[:,2] must be height
                   parameters: Dict[str, Any]):
+    tlsPoints = np.unique(tlsPoints, axis=0)
+    tlsPoints = np.sort(tlsPoints.view([('x', np.double), ('y', np.double), ('z', np.double)]).squeeze(-1),
+                        order=['z','x','y']).view((np.double, 3))
+
     basePoint, baseRadius = findBase(tlsPoints)
     basePointIndex = len(tlsPoints)
     tlsPoints = np.append(tlsPoints, basePoint[np.newaxis], axis=0)
@@ -27,7 +31,7 @@ def generateSeeds(tlsPoints: npt.NDArray[np.double], # must be sorted by height 
     seedPoints = tlsPoints[seeds]
     seedRelPathPositions = relPathPositions[seeds]
 
-    return seedPoints, seedRelPathPositions
+    return seedPoints, seedRelPathPositions, tlsPoints
 
 
 def findBase(tlsPoints: npt.NDArray[np.double]) -> Tuple[npt.NDArray[np.double], np.double]:
@@ -56,7 +60,7 @@ def generateInitialSeeds(tlsPoints: npt.NDArray[np.double],
     tlsPoints, basePointIndex = removeUnconnectedComponents(tlsPoints, basePointIndex, kNeighbors) # TODO: could this remove large parts of data?
 
     tlsKDTree = KDTree(tlsPoints)
-    neighborGraph = buildNeighborGraph(tlsPoints, tlsKDTree, kNeighbors)
+    neighborGraph = buildNeighborGraph(tlsKDTree, kNeighbors)
 
     isConnected, relPathLocation, predecessors = getPathData(neighborGraph, basePointIndex)
     assert np.all(isConnected)
@@ -64,18 +68,16 @@ def generateInitialSeeds(tlsPoints: npt.NDArray[np.double],
     isConsidered = np.zeros(len(tlsPoints), dtype=np.bool)
     isSeed = np.zeros(len(tlsPoints), dtype=np.bool)
 
-    isConsidered[basePointIndex] = True
-
-    for seed in np.argsort(relPathLocation):
+    for seed in np.argsort(relPathLocation, kind="stable"):
         if isConsidered[seed]:
             continue
 
         while not isSeed[seed]:
             isSeed[seed] = True
 
-            searchRange = 2 * np.maximum(baseRadius * np.sqrt(relPathLocation[seed]),
-                                         initialSearchRange)
+            searchRange = max(2 * baseRadius * np.sqrt(relPathLocation[seed]), 2 * initialSearchRange)
             neighborIndices = tlsKDTree.query_ball_point(tlsPoints[seed], searchRange)
+
             isConsidered[neighborIndices] = True
 
             if seed == basePointIndex:
@@ -104,10 +106,10 @@ def filterSeeds(tlsPoints: npt.NDArray[np.double],
     return seedIndices[isSeed]
 
 
-def buildNeighborGraph(tlsPoints: npt.NDArray[np.double],
-                       tlsKDTree: KDTree,
+def buildNeighborGraph(tlsPointsLookUp: KDTree,
                        kNeighbors: int = 10) -> csr_array:
-    neighborDistances, neighborIndices = tlsKDTree.query(tlsPoints, k=kNeighbors + 1)
+    tlsPoints = tlsPointsLookUp.data
+    neighborDistances, neighborIndices = tlsPointsLookUp.query(tlsPoints, k=kNeighbors + 1)
     neighborDistances, neighborIndices = neighborDistances[:, 1:], neighborIndices[:, 1:]
 
     pointCount = len(tlsPoints)
@@ -122,7 +124,7 @@ def removeUnconnectedComponents(tlsPoints: npt.NDArray[np.double],
                                 basePointIndex: int,
                                 kNeighbors: int = 10) -> Tuple[npt.NDArray[np.double], int]:
     tlsKDTree = KDTree(tlsPoints)
-    neighborGraph = buildNeighborGraph(tlsPoints, tlsKDTree, kNeighbors)
+    neighborGraph = buildNeighborGraph(tlsKDTree, kNeighbors)
     _, componentLabels = connected_components(neighborGraph, directed=False)
 
     isConnected = componentLabels == componentLabels[basePointIndex]
@@ -130,7 +132,7 @@ def removeUnconnectedComponents(tlsPoints: npt.NDArray[np.double],
 
     newBasePointIdx = np.flatnonzero(np.flatnonzero(isConnected) == basePointIndex)
 
-    return tlsPoints, newBasePointIdx
+    return tlsPoints, int(newBasePointIdx)
 
 
 def getPathData(neighborGraph: csr_array,

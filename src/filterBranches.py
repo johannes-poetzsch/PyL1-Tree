@@ -111,7 +111,7 @@ def pruneByAngle(branches: List[Branch],
 
         directions = normalizeVectors(branch.skeletonPoints[1:] - branch.skeletonPoints[:-1])
 
-        for child in branch.children:
+        for child in list(branch.children):
             if child.isRemoved:
                 continue
 
@@ -170,18 +170,19 @@ def pruneThickeningLeaves(branches: List[Branch], branchSizeThreshold: int) -> n
 
         order = np.argsort(closestPointIndices)
         tlsPoints = leaf.tlsPoints[order]
+        skeletonPoints = leaf.skeletonPoints
         closestPointIndices = closestPointIndices[order]
         # TODO: test and fix this
         skeletonIndices, indices, counts = np.unique(closestPointIndices, return_index=True, return_counts=True)
 
-        segmentRadii = np.full(len(leaf.skeletonPoints), np.nan, dtype=np.double)
+        segmentRadii = np.full(len(skeletonPoints), np.nan, dtype=np.double)
         for skeletonIdx, idx, count in zip(skeletonIndices, indices, counts):
-            skeletonPoint = leaf.skeletonPoints[idx]
+            skeletonPoint = skeletonPoints[skeletonIdx]
             segmentPoints = tlsPoints[idx:idx + count]
-            if skeletonIdx == len(leaf.skeletonPoints) - 1:
-                segmentDirection = normalizeVectors(segmentPoints[-1] - segmentPoints[-2])
+            if skeletonIdx == len(skeletonPoints) - 1: # last point has no next point
+                segmentDirection = normalizeVectors(skeletonPoints[-1] - skeletonPoints[-2])
             else:
-                segmentDirection = normalizeVectors(segmentPoints[skeletonIdx+1] - segmentPoints[skeletonIdx])
+                segmentDirection = normalizeVectors(skeletonPoints[skeletonIdx+1] - skeletonPoints[skeletonIdx])
 
             distances = np.linalg.norm(segmentPoints - skeletonPoint, axis=1)
             baseDistances = np.abs(distanceAlongDirection(skeletonPoint, segmentPoints, segmentDirection))

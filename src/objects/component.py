@@ -100,8 +100,11 @@ class Component:
 
 
 class ConnectedComponent(Component):
-    def __init__(self, branches: List[Branch]):
+    def __init__(self, branches: List[Branch], pointsLookUp: KDTree):
         Component.__init__(self, branches)
+        self.checkedDistanceThreshold = 0.0
+        tlsPoints, self.searchRanges = self.getPoints(pointsLookUp)
+        self.tlsPointsLookUp = KDTree(tlsPoints)
 
 
     def extend(self, subComponent: ConnectedComponent):
@@ -144,7 +147,7 @@ class UnconnectedComponent(Component):
         self.directionData = {}
 
 
-    def connect(self, resolution: float) -> Tuple[ConnectedComponent, Branch, Optional[Branch]]:
+    def connect(self, resolution: float, pointsLookUp: KDTree) -> Tuple[ConnectedComponent, Branch, Optional[Branch]]:
         if len(self.possibleConnections) == 0:
             raise ValueError("Components can not be connected.")
         score, startBranch, startIdx, endBranch, endIdx = self.possibleConnections[0]
@@ -166,7 +169,7 @@ class UnconnectedComponent(Component):
         else:
             childBranch.reorientSubtree(connectionBranch)
 
-        connectedComponent = ConnectedComponent(self.branches + [connectionBranch])
+        connectedComponent = ConnectedComponent(self.branches + [connectionBranch], pointsLookUp)
 
         return connectedComponent, connectionBranch, sibling
 

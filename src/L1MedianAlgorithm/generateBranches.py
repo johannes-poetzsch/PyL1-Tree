@@ -1,7 +1,7 @@
 import numpy as np
 import numpy.typing as npt
 from scipy.spatial import KDTree
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from .findBranches import findNewBranches
 from ..objects.branch import Branch
@@ -18,6 +18,7 @@ def generateBranches(tlsPoints: npt.NDArray[np.double],
     tlsDensities = calculateDensity(None, tlsLookUp, 2 * parameters["initialSearchRange"])
 
     while parameters["searchRange"] <= 2 * parameters["baseRadius"]:
+        print(parameters["searchRange"], " / ", 2 * parameters["baseRadius"])
         for _ in range(parameters["maxIterationNumFixedRange"]):
             recomputeSkeletonPoints(skeletonData, tlsLookUp, tlsDensities,
                                     parameters["searchRange"], parameters["baseRadius"],
@@ -34,7 +35,6 @@ def generateBranches(tlsPoints: npt.NDArray[np.double],
                                                 parameters["branchSizeThreshold"]))
 
         parameters["searchRange"] *= 1 + parameters["iterationSpeed"]
-        print(parameters["searchRange"], " / ", 2 * parameters["baseRadius"])
 
     return skeletonBranches
 
@@ -65,7 +65,7 @@ def recomputeSkeletonPoints(skeletonData: npt.NDArray,
     skeletonLookUp = KDTree(coords)
     notFix = np.logical_not(skeletonData["isFix"])
 
-    neighborRadii = 2 * np.maximum(searchRange, skeletonData["relPathLocation"][notFix] * baseRadius)
+    neighborRadii = np.maximum(2 * searchRange, skeletonData["relPathLocation"][notFix] * 2 * baseRadius)
     neighborLists = skeletonLookUp.query_ball_point(coords[notFix], neighborRadii)
     hasNeighbors = np.array([len(n) > 1 for n in neighborLists], dtype=bool)
 

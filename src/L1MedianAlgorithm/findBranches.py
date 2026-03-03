@@ -19,7 +19,7 @@ def findNewBranches(skeletonData: npt.NDArray,
     neighborDistances, neighbors = neighborDistances[:, 1:], neighbors[:, 1:]
 
     newBranches = []
-    descendingSigmaOrder = np.flip(np.argsort(skeletonData["Sigma"]))
+    descendingSigmaOrder = np.argsort(-skeletonData["Sigma"], stable=True)
 
     for startIdx in descendingSigmaOrder:
         if skeletonData["isBranch"][startIdx] or not skeletonData["isFix"][startIdx]:

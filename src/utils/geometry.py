@@ -52,7 +52,7 @@ def linesPointsDistances(lineStartPoints: npt.NDArray, # (L,D)
 
 
 def movingTTest(sequence: npt.NDArray[np.double]) -> Optional[int]:
-    windowSize = max(5, np.floor(len(sequence) / 10))
+    windowSize = max(5, int(np.floor(len(sequence) / 10)))
 
     for startIdx, doubleWindow in enumerate(np.lib.stride_tricks.sliding_window_view(sequence, 2*windowSize)):
         firstWindow = doubleWindow[:windowSize]

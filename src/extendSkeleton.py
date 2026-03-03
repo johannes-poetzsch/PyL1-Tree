@@ -34,6 +34,9 @@ def extendSkeleton(stem: Branch,
                                     np.deg2rad(parameters["maxAngleThreshold"]),
                                     np.deg2rad(parameters["smoothAngleThreshold"]))
 
+        if skeleton is None:
+            continue
+
         junctionIdx = iSkeletonLookUp.query(skeleton[0].skeletonPoints[0])
         connectionBranch = connectSkeleton(skeleton,
                                            junctionPoint=iTreeSkeletonPoints[junctionIdx],
@@ -127,7 +130,7 @@ def generateSkeleton(tlsPoints: npt.NDArray[np.double],
     candidateTlsDistance = np.inf
 
     for skeletonSize in range(3, int(len(tlsPoints) ** 0.5) + 1):
-        skeletonPoints, _, _, _ = k_means(tlsPoints, skeletonSize)
+        skeletonPoints, _, _ = k_means(tlsPoints, skeletonSize)
         distances, indices = skeletonLookUp.query(skeletonPoints)
         closestIdx = distances.argmin()
 

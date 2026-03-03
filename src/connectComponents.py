@@ -21,54 +21,51 @@ def connectComponents(rootComponentStem: Branch,
                       windowSize: float,
                       densityFactor: float
                       ) -> Tuple[Branch, List[Branch], npt.NDArray[np.double]]:
-    rootComponent = ConnectedComponent(list(breadthFirstSearch(rootComponentStem)))
     unconnectedComponents = {UnconnectedComponent(list(breadthFirstSearch(stem)))
                              for stem in unconnectedComponentStems if stem is not rootComponentStem}
 
     originalComponentCount = len(unconnectedComponents) + 1
 
-    allBranches = list(chain(rootComponent.branches,
+    allBranches = list(chain(breadthFirstSearch(rootComponentStem),
                              chain.from_iterable([c.branches for c in unconnectedComponents])))
 
     assignedPoints = np.concatenate([b.tlsPoints for b in allBranches], axis=0)
     assignedPointsLookUp = KDTree(assignedPoints)
-
     unassignedPointsLookUp = KDTree(unassignedPoints)
 
+    rootComponent = ConnectedComponent(list(breadthFirstSearch(rootComponentStem)), assignedPointsLookUp)
+    connectedComponents = {rootComponent}
+
     originalMaxDistanceThreshold = maxDistanceThreshold
-    maxCheckedDistance = 0.0
     maxDistanceCap = 2.0
-    currentComponent: ConnectedComponent = rootComponent
     connectionBranches = set()
 
     while unconnectedComponents:
-        currentPoints, searchRanges = currentComponent.getPoints(assignedPointsLookUp)
-        currentPointsLookUp = KDTree(currentPoints)
-        for otherComponent in unconnectedComponents:
-            if currentComponent.getBoundingBoxDistance(otherComponent) <= maxDistanceThreshold:
-                findConnections(currentComponent, otherComponent, allBranches, searchRanges,
-                                currentPointsLookUp, unassignedPointsLookUp,
-                                minDistanceThreshold, maxDistanceThreshold, maxCheckedDistance,
-                                minAngleThreshold, maxAngleThreshold,
-                                windowSize, densityFactor)
-
-        if currentComponent is not rootComponent:
-            rootComponent.extend(currentComponent)
+        for component in connectedComponents:
+            if component.checkedDistanceThreshold < maxDistanceThreshold:
+                for otherComponent in unconnectedComponents:
+                    if component.getBoundingBoxDistance(otherComponent) <= maxDistanceThreshold:
+                        findConnections(component, otherComponent, allBranches, unassignedPointsLookUp,
+                                        minDistanceThreshold, maxDistanceThreshold,
+                                        minAngleThreshold, maxAngleThreshold,
+                                        windowSize, densityFactor)
 
         connectableComponents = [c for c in unconnectedComponents if len(c.possibleConnections) > 0]
+
         if len(connectableComponents) > 0:
             connectionComponent = max(connectableComponents, key=lambda c: c.possibleConnections[0])
 
             unconnectedComponents.remove(connectionComponent)
-            currentComponent, connectionBranch, splitEnd = connectionComponent.connect(resolution)
-
-            connectionBranches.add((connectionBranch, len(connectionBranch.skeletonPoints)))
+            connectionComponent, connectionBranch, splitEnd = connectionComponent.connect(resolution, assignedPointsLookUp)
 
             if splitEnd is not None:
-                rootComponent.branches.append(splitEnd)
                 splitBranch = splitEnd.parent
-                if splitBranch in rootComponent.directionData:
-                    del rootComponent.directionData[splitBranch]
+                for component in connectedComponents:
+                    if splitBranch in component.directionData:
+                        del component.directionData[splitBranch]
+
+            connectedComponents.add(connectionComponent)
+            connectionBranches.add((connectionBranch, len(connectionBranch.skeletonPoints)))
 
             connectionPoint = connectionBranch.skeletonPoints[0]
             for component in unconnectedComponents:
@@ -76,12 +73,9 @@ def connectComponents(rootComponentStem: Branch,
                     component.updatePossibleConnections(connectionBranch, minAngleThreshold, minDistanceThreshold)
 
             maxDistanceThreshold = originalMaxDistanceThreshold
-            maxCheckedDistance = 0.0
         else:
-            if maxDistanceThreshold >= maxDistanceCap or len(unconnectedComponents) <= originalComponentCount / 10:
+            if maxDistanceThreshold + 0.2 > maxDistanceCap or len(unconnectedComponents) <= originalComponentCount / 10:
                 break
-            currentComponent = rootComponent
-            maxCheckedDistance = maxDistanceThreshold
             maxDistanceThreshold += 0.2
 
     revertInterpolation(connectionBranches)
@@ -103,28 +97,25 @@ def connectComponents(rootComponentStem: Branch,
     raise ValueError("No stem was found")
 
 
-def findConnections(rootComponent: ConnectedComponent,
+def findConnections(connectedComponent: ConnectedComponent,
                     unconnectedComponent: UnconnectedComponent,
                     allBranches: List[Branch],
-                    searchRanges: List[npt.NDArray[np.double]],
-                    rootPointsLookUp: KDTree,
                     unassignedPointsLookUp: KDTree,
                     minDistanceThreshold: float,
                     maxDistanceThreshold: float,
-                    maxCheckedDistance: float,
                     minAngleThreshold: float,
                     maxAngleThreshold: float,
                     windowSize: float,
                     densityFactor: float):
     for endBranch in unconnectedComponent.branches:
-        if rootComponent.getBoundingBoxDistance(endBranch) > maxDistanceThreshold:
+        if connectedComponent.getBoundingBoxDistance(endBranch) > maxDistanceThreshold:
             continue
         directionsAtEnd = unconnectedComponent.getDirectionData(endBranch, minDistanceThreshold)
 
-        for startBranch, searchRange in zip(rootComponent.branches, searchRanges):
+        for startBranch, searchRange in zip(connectedComponent.branches, connectedComponent.searchRanges):
             if startBranch.branchBoundingBoxDistance(endBranch) > maxDistanceThreshold:
                 continue
-            directionsAtStart = rootComponent.getDirectionData(startBranch, minDistanceThreshold)
+            directionsAtStart = connectedComponent.getDirectionData(startBranch, minDistanceThreshold)
 
             for endIdx, startDirection, childDirections in directionsAtEnd:
                 for startIdx, (parentDirections, siblingDirections) in enumerate(directionsAtStart):
@@ -134,12 +125,13 @@ def findConnections(rootComponent: ConnectedComponent,
                     connectionLength = np.linalg.norm(
                         startBranch.skeletonPoints[startIdx] - endBranch.skeletonPoints[endIdx])
 
-                    if connectionLength > maxDistanceThreshold or connectionLength <= maxCheckedDistance:
+                    if (connectionLength > maxDistanceThreshold or
+                            connectionLength <= connectedComponent.checkedDistanceThreshold):
                         continue
 
                     score = scoreConnection(startBranch, startIdx, endBranch, endIdx, searchRange,
                                             startDirection, childDirections, parentDirections, siblingDirections,
-                                            allBranches, rootPointsLookUp, unassignedPointsLookUp,
+                                            allBranches, connectedComponent.tlsPointsLookUp, unassignedPointsLookUp,
                                             minAngleThreshold, maxAngleThreshold, windowSize, densityFactor)
                     if score is not None:
                         connection = (score, startBranch, startIdx, endBranch, endIdx)

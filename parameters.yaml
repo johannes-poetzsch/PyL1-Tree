@@ -26,3 +26,4 @@ parameters:
   windowSize: 0.1
   moveStep: 0.01
   smoothAngleThreshold: 45
+  heightAttributeIdx: 2
