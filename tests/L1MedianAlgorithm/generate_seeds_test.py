@@ -1,19 +1,11 @@
-import os.path
-
+import numpy as np
+import pytest
 from scipy.spatial import KDTree
 
-from tests.global_fixtures import *
 from src.L1MedianAlgorithm.generateSeeds import buildNeighborGraph, findBase, generateSeeds, getPathData, \
     removeUnconnectedComponents
-
-
-@pytest.fixture()
-def predecessors():
-    if not hasattr(predecessors, 'idx'):
-        data_path = "TestData/SeedPoints/GeodesicGraph/Predecessors.txt"
-        with open(os.path.join(rootPath(), data_path)) as f:
-            predecessors.idx = np.loadtxt(f, dtype=int)
-    return predecessors.idx.copy()
+from tests.global_fixtures import base_point, base_radius, parameters, tls_points
+from tests.L1MedianAlgorithm.fixtures import predecessors, rel_path_positions, seed_points, seed_rel_path_positions
 
 
 def test_find_base(tls_points, base_point, base_radius):
@@ -22,15 +14,16 @@ def test_find_base(tls_points, base_point, base_radius):
 
     result_base_point, result_base_radius = findBase(tls_points[:-1])
 
-    np.testing.assert_array_almost_equal(result_base_point, expected_base_point)
     assert result_base_radius == pytest.approx(expected_base_radius)
+    np.testing.assert_array_almost_equal(result_base_point, expected_base_point, decimal=12)
 
 
-def test_generate_seeds(tls_points, seed_points, seed_rel_path_positions, parameters):
+def test_generate_seeds(base_point, tls_points, seed_points, seed_rel_path_positions, parameters):
     expected_seedPoints, expected_rel_path_positions = seed_points, seed_rel_path_positions
     result_seed_points, result_rel_path_positions, tlsPoints = generateSeeds(tls_points[:-1], parameters)
 
-    np.testing.assert_array_almost_equal(result_seed_points, expected_seedPoints)
+    np.testing.assert_array_almost_equal(result_seed_points[-1], base_point, decimal=12)
+    np.testing.assert_array_equal(result_seed_points[:-1], expected_seedPoints[:-1])
     np.testing.assert_array_equal(result_rel_path_positions, expected_rel_path_positions)
 
 
@@ -49,4 +42,3 @@ def test_get_path_data(tls_points, predecessors, rel_path_positions):
     assert np.all(isConnected)
     np.testing.assert_array_equal(result_predecessors, expected_predecessors)
     np.testing.assert_array_equal(result_rel_path_positions, expected_rel_locations)
-

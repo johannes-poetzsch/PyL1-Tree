@@ -22,14 +22,14 @@ def generateSeeds(tlsPoints: npt.NDArray[np.double], # must be sorted by height 
     if parameters["initialSearchRange"] is None: parameters["initialSearchRange"] = baseRadius * 0.1
     if parameters["searchRange"] is None: parameters["searchRange"] = baseRadius * 0.1
 
-    tlsPoints, seeds, relPathPositions = generateInitialSeeds(tlsPoints,
-                                                              parameters["baseRadius"],
-                                                              parameters["initialSearchRange"],
-                                                              basePointIndex=basePointIndex)
+    tlsPoints, seedIndices, relPathPositions = generateInitialSeeds(tlsPoints,
+                                                                     parameters["baseRadius"],
+                                                                     parameters["initialSearchRange"],
+                                                                     basePointIndex=basePointIndex)
 
-    seeds = filterSeeds(tlsPoints, seeds, parameters["nearThreshold"])
-    seedPoints = tlsPoints[seeds]
-    seedRelPathPositions = relPathPositions[seeds]
+    seedIndices = filterSeeds(tlsPoints, seedIndices, parameters["nearThreshold"])
+    seedPoints = tlsPoints[seedIndices]
+    seedRelPathPositions = relPathPositions[seedIndices]
 
     return seedPoints, seedRelPathPositions, tlsPoints
 
@@ -84,9 +84,9 @@ def generateInitialSeeds(tlsPoints: npt.NDArray[np.double],
                 break
             seed = predecessors[seed]
 
-    seeds = isSeed.nonzero()[0]
+    seedIndices = np.flatnonzero(isSeed)
 
-    return tlsPoints, seeds, relPathLocation
+    return tlsPoints, seedIndices, relPathLocation
 
 
 def filterSeeds(tlsPoints: npt.NDArray[np.double],
@@ -137,7 +137,7 @@ def removeUnconnectedComponents(tlsPoints: npt.NDArray[np.double],
 
 def getPathData(neighborGraph: csr_array,
                 basePointIndex: int = 0
-                ) -> Tuple[npt.NDArray[bool], npt.NDArray[float], npt.NDArray[np.intp]]:
+                ) -> Tuple[npt.NDArray[bool], npt.NDArray[np.double], npt.NDArray[np.intp]]:
     _, predecessors = dijkstra(neighborGraph, indices=basePointIndex, directed=False, return_predecessors=True)
     predecessors = predecessors.flatten()
     pathTree = reconstruct_path(neighborGraph, predecessors, directed=False)

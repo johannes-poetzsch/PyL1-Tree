@@ -64,46 +64,51 @@ def recomputeSkeletonPoints(skeletonData: npt.NDArray,
     coords = skeletonData["Coords"]
     skeletonLookUp = KDTree(coords)
     notFix = np.logical_not(skeletonData["isFix"])
+    notFixCount = np.count_nonzero(notFix)
+    toOriginalIdx = np.flatnonzero(notFix)
+    changing = np.ones(notFixCount, dtype=bool)
 
     neighborRadii = np.maximum(2 * searchRange, skeletonData["relPathLocation"][notFix] * 2 * baseRadius)
     neighborLists = skeletonLookUp.query_ball_point(coords[notFix], neighborRadii)
-    hasNeighbors = np.array([len(n) > 1 for n in neighborLists], dtype=bool)
 
-    changing = notFix.copy()
-    changing[notFix] = hasNeighbors
-    changingToNotFix = np.nonzero(hasNeighbors)[0]
-    changingToOriginal = np.nonzero(changing)[0]
-    changingCount = len(changingToOriginal)
+    sigma = np.full(notFixCount, 0.5, dtype=np.double)
+    repulsion = np.zeros([notFixCount, 3], dtype=np.double)
+    for idx, point in enumerate(coords[notFix]):
+        neighbors = neighborLists[idx]
+        if len(neighbors) <= 1:
+            changing[idx] = False
+            continue
 
-    sigma = np.empty(changingCount)
-    repulsion = np.empty([changingCount, 3])
-    for idx, data in enumerate(skeletonData[changing]):
-        originalIdx = changingToOriginal[idx]
-        notFixIdx = changingToNotFix[idx]
+        originalIdx = toOriginalIdx[idx]
+        neighbors = [n for n in neighbors if n != originalIdx]
 
-        neighbors = [n for n in neighborLists[notFixIdx] if n != originalIdx]
-
-        neighborVectors = data["Coords"] - coords[neighbors]
+        neighborVectors = point - coords[neighbors]
         neighborDistances = np.linalg.norm(neighborVectors, axis=-1)
 
         sigma[idx] = calculateDirectionalDegree(neighborVectors, neighborDistances, searchRange)
         repulsion[idx] = calculateRepulsion(neighborVectors, neighborDistances, searchRange)
 
-    tlsNeighborLists = tlsLookUp.query_ball_point(coords[changing], neighborRadii[hasNeighbors])
-    tlsAverage = np.empty([changingCount, 3])
-    for idx, data in enumerate(skeletonData[changing]):
+    tlsNeighborLists = tlsLookUp.query_ball_point(coords[notFix], neighborRadii)
+    tlsAverage = np.zeros([notFixCount, 3], dtype=np.double)
+    for idx, point in enumerate(coords[notFix]):
         tlsNeighbors = tlsNeighborLists[idx]
+        if len(tlsNeighbors) == 0:
+            changing[idx] = False
+            continue
+
         neighborDensities = tlsDensities[tlsNeighbors]
         tlsNeighborPoints = tlsLookUp.data[tlsNeighbors]
 
-        tlsAverage[idx] = calculatePointAverage(data["Coords"], tlsNeighborPoints, neighborDensities, searchRange)
+        tlsAverage[idx] = calculatePointAverage(point, tlsNeighborPoints, neighborDensities, searchRange)
 
     minSigma = sigma.min()
     sigmaRange = sigma.max() - minSigma
     muRange = np.abs(maxMu - minMu)
 
     mu = (muRange / sigmaRange) * (sigma - minSigma) + minMu
-    coords[changing] = tlsAverage + mu[:,np.newaxis] * repulsion
+    changing[mu < 0] = False
+
+    coords[np.flatnonzero(notFix)[changing]] = tlsAverage[changing] + mu[changing][:,np.newaxis] * repulsion[changing]
 
 
 def calculateDirectionalDegree(neighborVectors: npt.NDArray[np.double],
@@ -180,35 +185,35 @@ def computeSmoothDirectionalDegrees(skeletonData: npt.NDArray,
                                     ) -> npt.NDArray:
     skeletonLookUp = KDTree(skeletonData["Coords"])
     notFix = ~skeletonData["isFix"] # (n)
-    notFixIndices = np.nonzero(notFix)[0] # (nF)
+    notFixIndices = np.flatnonzero(notFix)
 
     _, neighbors = skeletonLookUp.query(skeletonData[notFix]["Coords"], kNeighbors + 1) # (nF,k+1)
     neighbors = neighbors[:,1:] # (nF,k)
 
-    neighborExists = neighbors < len(skeletonData) # (nF,k)
-    neighbors[~neighborExists] = 0
+    if np.any(neighbors == len(skeletonData)):
+        raise ValueError("Found too few neighbors to calculate smooth directional degrees")
 
-    neighborIsValid = np.logical_and(neighborExists, notFix[neighbors]) # (nF,k)
+    neighborIsValid = notFix[neighbors] # (nF,k)
     validNeighborsCount = np.count_nonzero(neighborIsValid, axis=1) # (nF)
 
-    hasEnoughNeighbors = np.count_nonzero(neighborExists, axis=-1) > 3 # (nF)
     hasEnoughValidNeighbors = validNeighborsCount > 3 # (nF)
-    skeletonData["Sigma"][notFixIndices[~hasEnoughNeighbors]] = 0.5
-    skeletonData["Sigma"][notFixIndices[hasEnoughNeighbors & ~hasEnoughValidNeighbors]] = 0.95
 
-    neighborVectors = (skeletonData["Coords"][neighbors[hasEnoughValidNeighbors]] -
-                       skeletonData["Coords"][notFixIndices[hasEnoughValidNeighbors]][:,np.newaxis,:]) # (V,k,3)
-    neighborVectors = np.where(neighborIsValid[hasEnoughValidNeighbors,:,np.newaxis],
-                               neighborVectors, np.zeros_like(neighborVectors))
+    for idx in range(len(notFixIndices)):
+        if not hasEnoughValidNeighbors[idx]:
+            skeletonData["Sigma"][notFixIndices[idx]] = 0.95
+            continue
 
-    skeletonData["Sigma"][notFixIndices[hasEnoughValidNeighbors]] = calculateDirectionalDegree(neighborVectors,
-                                                                                               useDecayingWeights=False)
+        originalIdx = notFixIndices[idx]
+        neighborVectors = (skeletonData["Coords"][neighbors[idx][neighborIsValid[idx]]]
+                           - skeletonData["Coords"][originalIdx]) # (nF,3)
+        skeletonData["Sigma"][originalIdx] = calculateDirectionalDegree(neighborVectors, useDecayingWeights=False)
+
     invSigma = 1.0 - skeletonData["Sigma"] # (n)
 
     neighborInvSigmaSum = np.where(neighborIsValid, invSigma[neighbors], 0.0).sum(axis=-1) # (nF)
-    skeletonData["Sigma"][notFix] = 1.0 - ((invSigma[notFix] + neighborInvSigmaSum) / (1.0 + validNeighborsCount))
+    sigma = 1.0 - ((invSigma[notFix] + neighborInvSigmaSum) / (1.0 + validNeighborsCount))
 
-    skeletonData["Sigma"][skeletonData["Sigma"] < 0.0] = 0.5
+    skeletonData["Sigma"][notFix] = np.where(sigma < 0, 0.5, sigma)
 
 
 def setFixPoints(skeletonData: npt.NDArray,
