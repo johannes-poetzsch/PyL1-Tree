@@ -1,43 +1,47 @@
-import matlab.engine
 import numpy as np
-from typing import List
+import yaml
 
 from src.adjustBifurcations import adjustBifurcations
+from src.constructTreeGraph import constructTreeGraph
+from src.constructTreeModel import constructTreeModel
 from src.extendSkeleton import extendSkeleton
 from src.filterBranches import filterTreeBranches
+from src.L1MedianAlgorithm.generateSeeds import generateSeeds
+from src.L1MedianAlgorithm.generateBranches import generateBranches
 from src.smoothBranches import smoothBranches
-from src.objects.branch import Branch
-from src.utils.iteration import breadthFirstSearch
-from src.utils.parseMatlab import parse_struct, import_tree_model
+from src.utils.ioUtils import exportModel
 
 
 def main():
-    eng = matlab.engine.start_matlab()
-    eng.eval("load(\"L1TreeAdjustBifurcation_Input.mat\")", nargout=0)
-    
-    treeModel, unassignedTlsPoints = import_tree_model(eng)
-    stem = treeModel[0]
-    parameters = parse_struct(eng, "parameters")
-    #tlsPoints = cp.array(eng.eval("tlsPoints"))  # TODO branchIDs -1
-    eng.exit()
+    with open("Data/Tree_1.txt") as inputFile:
+        tlsPoints = np.loadtxt(inputFile, dtype=np.double)
+    with open("parameters.yaml") as config:
+        parameters = yaml.safe_load(config)["parameters"]
 
-    print("finished import")
+    if parameters["heightAttributeIdx"] != 2:
+        h = parameters["heightAttributeIdx"]
+        height = tlsPoints[:,h].copy()
+        tlsPoints[:,h] = tlsPoints[:,2]
+        tlsPoints[:,2] = height
+
+    seedPoints, relPathPositions, tlsPoints = generateSeeds(tlsPoints, parameters)
+    branches = generateBranches(tlsPoints, seedPoints, relPathPositions, parameters)
+    stem, prunedTlsPoints1 = constructTreeGraph(tlsPoints, branches, parameters)
 
     adjustBifurcations(stem, parameters)
-    
-    print("finished adjusting bifurcations")
-    treeModel = list(breadthFirstSearch(stem))
-    print(len(treeModel))
 
-    prunedTlsPoints = filterTreeBranches(stem, parameters)
+    prunedTlsPoints2 = filterTreeBranches(stem, parameters)
 
-    if prunedTlsPoints is not None:
-        unassignedTlsPoints = np.append(unassignedTlsPoints, prunedTlsPoints, axis=0)
+    prunedTlsPoints = np.concatenate((prunedTlsPoints1, prunedTlsPoints2), axis=0)
 
-    unassignedTlsPoints = smoothBranches(stem, tlsPoints, unassignedTlsPoints, parameters)
+    unassignedTlsPoints = smoothBranches(stem, tlsPoints, prunedTlsPoints, parameters)
     extendSkeleton(stem, unassignedTlsPoints, parameters)
 
+    branchRadii, radiusIsCredible = constructTreeModel(stem)
+    exportModel(stem, branchRadii, radiusIsCredible, "Results/Tree_1.csv")
+
     print("finished")
+    
 
 
 if __name__ == '__main__':
