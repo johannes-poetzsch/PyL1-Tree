@@ -65,28 +65,32 @@ def recomputeSkeletonPoints(skeletonData: npt.NDArray,
     skeletonLookUp = KDTree(coords)
     notFix = np.logical_not(skeletonData["isFix"])
     notFixCount = np.count_nonzero(notFix)
-    toOriginalIdx = np.flatnonzero(notFix)
+    toNotFixIdx = np.empty(len(skeletonData), dtype=np.intp)
+    toNotFixIdx[notFix] = np.arange(notFixCount)
     changing = np.ones(notFixCount, dtype=bool)
 
     neighborRadii = np.maximum(2 * searchRange, skeletonData["relPathLocation"][notFix] * 2 * baseRadius)
     neighborLists = skeletonLookUp.query_ball_point(coords[notFix], neighborRadii)
 
-    sigma = np.full(notFixCount, 0.5, dtype=np.double)
     repulsion = np.zeros([notFixCount, 3], dtype=np.double)
-    for idx, point in enumerate(coords[notFix]):
-        neighbors = neighborLists[idx]
-        if len(neighbors) <= 1:
-            changing[idx] = False
+    for idx, dataPoint in enumerate(skeletonData):
+        if dataPoint["isFix"]:
             continue
 
-        originalIdx = toOriginalIdx[idx]
-        neighbors = [n for n in neighbors if n != originalIdx]
+        nfIdx = toNotFixIdx[idx]
+        neighbors = neighborLists[nfIdx]
+        if len(neighbors) <= 1:
+            changing[nfIdx] = False
+            dataPoint["Sigma"] = 0.5
+            continue
 
-        neighborVectors = point - coords[neighbors]
+        neighbors = [n for n in neighbors if n != idx]
+
+        neighborVectors = dataPoint["Coords"] - coords[neighbors]
         neighborDistances = np.linalg.norm(neighborVectors, axis=-1)
 
-        sigma[idx] = calculateDirectionalDegree(neighborVectors, neighborDistances, searchRange)
-        repulsion[idx] = calculateRepulsion(neighborVectors, neighborDistances, searchRange)
+        dataPoint["Sigma"] = calculateDirectionalDegree(neighborVectors, neighborDistances, searchRange)
+        repulsion[nfIdx] = calculateRepulsion(neighborVectors, neighborDistances, searchRange)
 
     tlsNeighborLists = tlsLookUp.query_ball_point(coords[notFix], neighborRadii)
     tlsAverage = np.zeros([notFixCount, 3], dtype=np.double)
@@ -101,11 +105,11 @@ def recomputeSkeletonPoints(skeletonData: npt.NDArray,
 
         tlsAverage[idx] = calculatePointAverage(point, tlsNeighborPoints, neighborDensities, searchRange)
 
-    minSigma = sigma.min()
-    sigmaRange = sigma.max() - minSigma
+    minSigma, maxSigma = skeletonData["Sigma"].min(), skeletonData["Sigma"].max()
+    sigmaRange = maxSigma - minSigma
     muRange = np.abs(maxMu - minMu)
 
-    mu = (muRange / sigmaRange) * (sigma - minSigma) + minMu
+    mu = (muRange / sigmaRange) * (skeletonData["Sigma"][notFix] - minSigma) + minMu
     changing[mu < 0] = False
 
     coords[np.flatnonzero(notFix)[changing]] = tlsAverage[changing] + mu[changing][:,np.newaxis] * repulsion[changing]

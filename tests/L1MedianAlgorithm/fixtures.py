@@ -229,7 +229,20 @@ def seed_rel_path_positions():
 
 
 @pytest.fixture
-def smooth_sigma(current_range):
+def sigma(current_range):
+    if current_range == "first Range":
+        return np.zeros(5086, dtype=np.double)
+    elif current_range == "second Range":
+        data_path = "TestData/L1MedianAlgorithm/secondRange/Sigma.mat"
+    elif current_range == "final Range":
+        data_path = "TestData/L1MedianAlgorithm/finalRange/Sigma.mat"
+    else:
+        raise ValueError("Invalid range")
+    return loadmat(os.path.join(rootPath(), data_path))["sigma"].squeeze()
+
+
+@pytest.fixture
+def sigma_after(current_range):
     if current_range == "first Range":
         return np.zeros(5086, dtype=np.double)
     elif current_range == "second Range":
