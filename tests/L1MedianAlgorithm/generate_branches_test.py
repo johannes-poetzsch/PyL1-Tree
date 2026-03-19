@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 from scipy.spatial import KDTree
 
 from tests.global_fixtures import base_point, base_radius, initial_search_range, parameters, tls_points
@@ -25,13 +26,19 @@ def test_calculate_density(tls_points, densities, initial_search_range):
     np.testing.assert_array_almost_equal(result_densities, expected_densities, decimal=15)
 
 
-def test_recompute_skeleton_points(base_radius, parameters, search_range, tls_points, seed_rel_path_positions, densities,
-                                   fixed, is_branch, ignored, positions, positions_after, sigma):
-    tlsLookUp = KDTree(tls_points)
+@pytest.fixture
+def input_data(fixed, ignored, is_branch, positions, seed_rel_path_positions, sigma):
     skeletonData = initializeSkeleton(positions[~ignored], seed_rel_path_positions[~ignored])
     skeletonData["isBranch"] = is_branch[~ignored]
     skeletonData["isFix"] = fixed[~ignored]
     skeletonData["Sigma"] = sigma[~ignored]
+    return skeletonData
+
+
+def test_recompute_skeleton_points(base_radius, parameters, search_range, tls_points, densities,
+                                   input_data, ignored, positions_after):
+    tlsLookUp = KDTree(tls_points)
+    skeletonData = input_data
 
     for iteration in range(parameters["maxIterationNumFixedRange"]):
         recomputeSkeletonPoints(skeletonData, tlsLookUp, densities, search_range, base_radius,
@@ -40,25 +47,19 @@ def test_recompute_skeleton_points(base_radius, parameters, search_range, tls_po
     np.testing.assert_array_almost_equal(skeletonData["Coords"], positions_after[~ignored], decimal=5)
 
 
-def test_recompute_skeleton_points_one_interation(base_radius, parameters, tls_points, seed_rel_path_positions,
-                                                  densities, fixed, ignored, is_branch,
-                                                  positions, positions_after_one_iteration, search_range, sigma):
+def test_recompute_skeleton_points_one_interation(base_radius, parameters, tls_points, densities,
+                                                  input_data, ignored, positions_after_one_iteration, search_range):
     tlsLookUp = KDTree(tls_points)
-    skeletonData = initializeSkeleton(positions[~ignored], seed_rel_path_positions[~ignored])
-    skeletonData["isBranch"] = is_branch[~ignored]
-    skeletonData["isFix"] = fixed[~ignored]
-    skeletonData["Sigma"] = sigma[~ignored]
+    skeletonData = input_data
     recomputeSkeletonPoints(skeletonData, tlsLookUp, densities, search_range, base_radius,
                             parameters["minMu"], parameters["maxMu"])
 
-    np.testing.assert_array_almost_equal(skeletonData["Coords"], positions_after_one_iteration[~ignored], decimal=12)
+    np.testing.assert_array_almost_equal(skeletonData["Coords"], positions_after_one_iteration[~ignored], decimal=13)
 
 
-def test_filter_close_points(parameters, seed_rel_path_positions,
-                             fixed, ignored, ignored_after, is_branch, positions_after):
-    skeletonData = initializeSkeleton(positions_after[~ignored], seed_rel_path_positions[~ignored])
-    skeletonData["isBranch"] = is_branch[~ignored]
-    skeletonData["isFix"] = fixed[~ignored]
+def test_filter_close_points(parameters, ignored, ignored_after, input_data, positions_after):
+    skeletonData = input_data
+    skeletonData["Coords"] = positions_after[~ignored]
 
     filtered_skeleton_data = filterCloseDataPoints(skeletonData, parameters["nearThreshold"])
     np.testing.assert_array_equal(filtered_skeleton_data["Coords"], positions_after[~ignored_after])

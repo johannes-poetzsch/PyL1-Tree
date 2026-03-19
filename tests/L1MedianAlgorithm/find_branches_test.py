@@ -20,8 +20,7 @@ def test_find_new_branches(branches, parameters, seed_rel_path_positions,
     toFilteredIndex = np.empty(len(ignored_after), dtype=np.intp)
     toFilteredIndex[~ignored_after] = np.arange(np.count_nonzero(~ignored_after))
 
-    expected_branches = [toFilteredIndex[b] for b in branches]
-    expected_branch_points = [skeletonData["Coords"][b] for b in expected_branches]
+    expected_branch_points = [b.skeletonPoints for b in branches]
 
     branches = findNewBranches(skeletonData, parameters["kTracingThreshold"], parameters["distanceTracingThreshold"],
                                np.deg2rad(parameters["angleTracingThreshold"]), parameters["sigmaTracingThreshold"],

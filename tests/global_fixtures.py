@@ -5,9 +5,7 @@ from scipy.io import loadmat
 from typing import Any, Dict
 import yaml
 
-
-def rootPath():
-    return os.path.dirname(globals()['__file__'])
+from tests.utils.data_import import rootPath
 
 
 @pytest.fixture
