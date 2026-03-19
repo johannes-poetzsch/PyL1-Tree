@@ -22,6 +22,7 @@ def constructTreeGraph(tlsPoints: npt.NDArray[np.double],
                        ) -> Tuple[Branch, npt.NDArray[np.double]]:
     Branch.assignAllPoints(tlsPoints, branches, useTrimming=True)
     branches, _ = preFilterBranches(branches, parameters["baseRadius"])
+    addBranchEndPoints(branches)
 
     componentStems = constructComponents(branches, parameters["minDistanceThreshold"], heightAttribute)
     rootComponentStem = min(componentStems, key=lambda componentStem: componentStem.skeletonPoints[0][heightAttribute])
@@ -29,13 +30,11 @@ def constructTreeGraph(tlsPoints: npt.NDArray[np.double],
     branches = list(chain.from_iterable([breadthFirstSearch(stem) for stem in componentStems]))
     trimmedPoints = Branch.assignAllPoints(tlsPoints, branches, useTrimming=True)
 
-    stem, prunedBranches, trimmedPoints = (
-        connectComponents(rootComponentStem, componentStems, trimmedPoints,
-                          parameters["minDistanceThreshold"], parameters["maxDistanceThreshold"],
-                          np.deg2rad(parameters["minAngleThreshold"]),
-                          np.deg2rad(parameters["maxAngleThreshold"]),
-                          parameters["resolution"], parameters["windowSize"],
-                          parameters["densityFactor"]))
+    stem, prunedBranches, trimmedPoints = connectComponents(
+        rootComponentStem, componentStems, trimmedPoints,
+        parameters["minDistanceThreshold"], parameters["maxDistanceThreshold"],
+        np.deg2rad(parameters["minAngleThreshold"]), np.deg2rad(parameters["maxAngleThreshold"]),
+        parameters["resolution"], parameters["windowSize"], parameters["densityFactor"])
 
     trimmedPoints = addBasePoint(stem, parameters["basePoint"], trimmedPoints)
     prunedPoints1 = filterTreeBranches(stem, parameters, pruneNewLeaves=True)
@@ -61,6 +60,26 @@ def addBasePoint(stem: Branch, basePoint: npt.NDArray[np.double], unassignedTlsP
         unassignedTlsPoints = Branch.assignLocalPoints(unassignedTlsPoints, [stem], useTrimming=True)
 
     return unassignedTlsPoints
+
+
+def addBranchEndPoints(branches: List[Branch]):
+    for branch in branches:
+        if len(branch.skeletonPoints) < 4:
+            continue
+
+        startDirection = normalizeVectors(branch.skeletonPoints[1] - branch.skeletonPoints[0])
+        endDirection = normalizeVectors(branch.skeletonPoints[-1] - branch.skeletonPoints[-2])
+
+        if angle(startDirection, endDirection) < np.pi / 2:  # acute angle are fine
+            continue
+
+        firstPartDirections = normalizeVectors(branch.skeletonPoints[1:-2] - branch.skeletonPoints[0])
+        secondPartDirections = normalizeVectors(branch.skeletonPoints[-1] - branch.skeletonPoints[2:-1])
+
+        splitAngles = angle(firstPartDirections, secondPartDirections)
+        splitIdx = np.argmax(splitAngles) + 1
+
+        branch.addEndPoints([splitIdx, splitIdx + 1])
 
 
 def createSkeletonGraph(branches: List[Branch],
@@ -127,8 +146,8 @@ def preFilterBranches(branches: List[Branch],
                       baseRadius: float
                       ) -> Tuple[List[Branch], npt.NDArray[np.double]]:
     pruneUncenteredBranches(branches)
-    branches = [b for b in branches if not b.isRemoved]
     removedBranches = [b for b in branches if b.isRemoved]
+    branches = [b for b in branches if not b.isRemoved]
     # TODO: Step 1.2.2 does not work in original implementation -> implement anyways or keep behavior?
 
     branches.sort(key=lambda b: b.length, reverse=True)
@@ -137,11 +156,12 @@ def preFilterBranches(branches: List[Branch],
 
     searchRanges = np.array([np.quantile(d, 0.9, method="hazen") if len(d) > 0 else 0.0
                              for d in branchTlsDistances])
-    filterByInfluence(branches, searchRanges=np.minimum(searchRanges, baseRadius))
+    filterByInfluence(branches, searchRanges=np.minimum(searchRanges, baseRadius), useMean=True)
 
-    branches = [b for b in branches if not b.isRemoved]
     removedBranches.extend([b for b in branches if b.isRemoved])
+    branches = [b for b in branches if not b.isRemoved]
 
-    prunedPoints = np.concatenate([b.tlsPoints for b in branches], axis=0)
+    prunedPoints = np.concatenate([b.tlsPoints for b in removedBranches], axis=0) \
+        if removedBranches else np.empty((0,3), dtype=np.double)
 
     return branches, prunedPoints

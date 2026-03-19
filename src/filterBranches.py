@@ -53,8 +53,11 @@ def filterByLength(branches: List[Branch],
 
 
 def filterByInfluence(branches: List[Branch],
-                      searchRanges: List[float]) -> npt.NDArray[np.double]:
+                      searchRanges: List[float],
+                      useMean: bool = False) -> npt.NDArray[np.double]:
     assert(branches[0].isStem())
+
+    aggregate = np.mean if useMean else np.max
 
     trimmedPoints = []
     leaves = [b for b in branches if b.isLeaf()]
@@ -71,7 +74,7 @@ def filterByInfluence(branches: List[Branch],
 
             distances = branch.getDistances(leaf.skeletonPoints, trimStart=True, trimEnd=True, returnTrimming=False)
 
-            if len(distances) > len(leaf.skeletonPoints) / 2 and distances.max() < searchRange:
+            if len(distances) > len(leaf.skeletonPoints) / 2 and aggregate(distances) < searchRange:
                 removedPoints = leaf.remove()
                 closeBranches = [branch, leaf.parent]
                 trimmedPoints.append(Branch.assignLocalPoints(removedPoints, branches, closeBranches, useTrimming=True))
@@ -207,25 +210,26 @@ def pruneUncenteredBranches(branches: List[Branch]) -> List[Branch]:
     for branch in branches:
         if branch.isRemoved:
             continue
-        distances, pedalPoints, _ = stripPointsDistances(branch.skeletonPoints[:-1], branch.tlsPoints,
-                                                         returnPedalInfo=True)
+        distances, pedalPoints, _ = stripPointsDistances(branch.skeletonPoints, branch.tlsPoints, returnPedalInfo=True)
 
         tlsPoints = branch.tlsPoints[distances > minDistance]
         pedalPoints = pedalPoints[distances > minDistance]
-        if len(tlsPoints) <= 1:
+        if len(tlsPoints) == 0:
+            branch.remove()
+            prunedBranches.append(branch)
             continue
 
         branchDirection = normalizeVectors(branch.skeletonPoints[-1] - branch.skeletonPoints[0])
 
         coordinateTransformation = np.empty([3,3], dtype=np.double)
         coordinateTransformation[2] = branchDirection
-        coordinateTransformation[0] = tlsPoints[0] - pedalPoints[0]
+        coordinateTransformation[0] = normalizeVectors(tlsPoints[0] - pedalPoints[0])
         coordinateTransformation[1] = normalizeVectors(np.cross(coordinateTransformation[0],
                                                                 coordinateTransformation[2]))
 
         oldCoords = branch.skeletonPoints[0] + tlsPoints - pedalPoints
         newCoords = (oldCoords - branch.skeletonPoints[0]) @ np.linalg.inv(coordinateTransformation)
-        radialDirections = normalizeVectors(newCoords[:2])
+        radialDirections = normalizeVectors(newCoords[:,:2])
 
         angles = np.rad2deg(np.acos(radialDirections[:,0]))
         isReflexAngle = radialDirections[:,1] < 0.0

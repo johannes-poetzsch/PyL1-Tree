@@ -170,8 +170,7 @@ class Branch:
         self.updateSkeletonMeasurements()
 
 
-    def remove(self,
-               adjustConnectedBranches: bool = True) -> npt.NDArray[np.double]:
+    def remove(self, adjustConnectedBranches: bool = True) -> npt.NDArray[np.double]:
         self.isRemoved = True
         parent = self.parent
         self.setParent(None)
