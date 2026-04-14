@@ -1,7 +1,7 @@
 import numpy as np
 import numpy.typing as npt
 from scipy.spatial import KDTree
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .findBranches import findNewBranches
 from ..objects.branch import Branch
@@ -11,7 +11,8 @@ from ..utils.pointMetrics import calculateDensity, decayingWeights
 def generateBranches(tlsPoints: npt.NDArray[np.double],
                      seedPoints: npt.NDArray[np.double],
                      relPathLocations: npt.NDArray[np.double],
-                     parameters: Dict[str, Any]) -> List[Branch]:
+                     parameters: Dict[str, Any]
+                     ) -> Tuple[List[Branch], npt.NDArray[np.double]]:
     skeletonBranches: List[Branch] = []
     tlsLookUp = KDTree(tlsPoints)
     skeletonData = initializeSkeleton(seedPoints, relPathLocations)
@@ -36,7 +37,9 @@ def generateBranches(tlsPoints: npt.NDArray[np.double],
 
         parameters["searchRange"] *= 1 + parameters["iterationSpeed"]
 
-    return skeletonBranches
+    unfixedPoints = skeletonData["Coords"][~skeletonData["isFix"]]
+
+    return skeletonBranches, unfixedPoints
 
 
 def initializeSkeleton(seedPoints: npt.NDArray[np.double],
@@ -112,7 +115,7 @@ def recomputeSkeletonPoints(skeletonData: npt.NDArray,
     mu = (muRange / sigmaRange) * (skeletonData["Sigma"][notFix] - minSigma) + minMu
     changing[mu < 0] = False
 
-    coords[np.flatnonzero(notFix)[changing]] = tlsAverage[changing] + mu[changing][:,np.newaxis] * repulsion[changing]
+    coords[np.flatnonzero(notFix)[changing]] = tlsAverage[changing] + mu[changing,np.newaxis] * repulsion[changing]
 
 
 def calculateDirectionalDegree(neighborVectors: npt.NDArray[np.double],

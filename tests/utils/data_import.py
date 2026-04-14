@@ -11,7 +11,8 @@ def rootPath():
 
 def import_branches(directory_path: str,
                     skeleton_points: np.ndarray,
-                    tls_points: Optional[np.ndarray] = None):
+                    tls_points: Optional[np.ndarray] = None,
+                    end_point_ids: Optional[np.ndarray] = None):
     branches_path = os.path.join(rootPath(), directory_path, 'branches.txt')
     closest_branches_path = os.path.join(rootPath(), directory_path, 'closestBranches.txt')
     trimmed_path = os.path.join(rootPath(), directory_path, 'isTrimmed.txt')
@@ -36,6 +37,11 @@ def import_branches(directory_path: str,
             branch_tls_points = None if tls_points is None else tls_points[closest_branches == idx]
 
             branch = Branch(skeleton_points[skeleton_ids], branch_tls_points)
+
+            if end_point_ids is not None:
+                end_point_indices = np.flatnonzero(np.isin(skeleton_ids[1:-1], end_point_ids)) + 1
+                branch.addEndPoints(end_point_indices)
+
             branches.append(branch)
 
     return branches

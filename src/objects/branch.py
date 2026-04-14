@@ -32,6 +32,14 @@ class Branch:
         self.isRemoved = False
 
 
+    def __len__(self):
+        return len(self.skeletonPoints)
+
+
+    def __getitem__(self, item):
+        return self.skeletonPoints[item]
+
+
     def isLeaf(self):
         return len(self.children) == 0
 
@@ -157,7 +165,7 @@ class Branch:
         if self.isFlipped or child.isFlipped:
             raise ValueError("Ensure branches are not flipped before expanding!")
 
-        originalPointCount = len(self.skeletonPoints)
+        originalPointCount = len(self)
         self.skeletonPoints = np.append(self.skeletonPoints, child.skeletonPoints[1:], axis=0)
         self.addEndPoints([originalPointCount-1])
         if child.endPointIndices is not None:
@@ -166,6 +174,9 @@ class Branch:
 
         xp = cp.get_array_module(self.tlsPoints, child.tlsPoints)
         self.tlsPoints = xp.append(self.tlsPoints, child.tlsPoints, axis=0)
+
+        for newChild in list(child.children):
+            newChild.setParent(self)
 
         self.updateSkeletonMeasurements()
 
@@ -208,7 +219,7 @@ class Branch:
         splitIdx = splitIdx % len(self.skeletonPoints)
 
         if splitIdx == 0:
-            return self.parent, self
+            return self.parent, None
         if splitIdx == len(self.skeletonPoints) - 1:
             return self, None
 
@@ -219,7 +230,7 @@ class Branch:
 
         self.skeletonPoints = self.skeletonPoints[:splitIdx + 1]
         if len(self.tlsPoints) > 0:
-            Branch.reassignPoints([self, splitEnd], changedBranches=[self])
+            Branch.reassignPoints([self, splitEnd], affectedBranches=[self])
 
         if self.endPointIndices is not None:
             endPointIndices = self.endPointIndices
@@ -290,7 +301,7 @@ class Branch:
     def findCloseBranches(points: npt.NDArray[np.double],
                           branches: List[Branch]) -> npt.NDArray[int]:
         skeletonPoints = np.concatenate([b.skeletonPoints for b in branches], axis=0)
-        branchIds = np.arange(len(branches), dtype=int).repeat([len(b.skeletonPoints) for b in branches])
+        branchIds = np.arange(len(branches), dtype=int).repeat([len(b) for b in branches])
 
         lookUp = KDTree(skeletonPoints)
 
@@ -415,15 +426,15 @@ class Branch:
     @staticmethod
     def reassignPoints(branches: List[Branch],
                        unassignedTlsPoints: Optional[npt.NDArray[np.double]] = None,
-                       changedBranches: Optional[List[Branch]] = None,
+                       affectedBranches: Optional[List[Branch]] = None,
                        originalDistances: Optional[List[npt.NDArray[np.double]]] = None,
                        useTrimming: bool = True
                        ) -> npt.NDArray[np.double]:
-        changedBranches = branches if changedBranches is None else changedBranches
+        affectedBranches = branches if affectedBranches is None else affectedBranches
         originalDistances = repeat(None) if originalDistances is None else originalDistances
         prunedTlsPoints = []
 
-        for branch, od in zip(changedBranches, originalDistances):
+        for branch, od in zip(affectedBranches, originalDistances):
             tlsPoints = branch.tlsPoints
             if len(tlsPoints) == 0:
                 continue

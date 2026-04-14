@@ -9,18 +9,18 @@ from src.objects.branch import Branch
 
 def buildSubtreeFromGraph(skeletonGraph: nx.DiGraph,
                           skeletonPoints: npt.NDArray[np.double],
-                          rootIdx: int,
+                          startIdx: int,
                           nextIdx: Optional[int] = None,
                           parent: Optional[Branch] = None,
                           isEndPoint: Optional[npt.NDArray[bool]] = None
                           ) -> Branch:
     if nextIdx is None:
-        successors = list(skeletonGraph.successors(rootIdx))
+        successors = list(skeletonGraph.successors(startIdx))
         if len(successors) != 1:
             raise ValueError("Unclear next index for graph traversal")
         else:
             nextIdx = successors[0]
-    pointIndices = [rootIdx, nextIdx]
+    pointIndices = [startIdx, nextIdx]
 
     while True:
         successors = list(skeletonGraph.successors(pointIndices[-1]))
@@ -38,9 +38,8 @@ def buildSubtreeFromGraph(skeletonGraph: nx.DiGraph,
             branch.addEndPoints(endPointIndices[1:-1])
 
     for s in successors:
-        buildSubtreeFromGraph(skeletonGraph, skeletonPoints,
-                              rootIdx=pointIndices[-1], nextIdx=s,
-                              parent=branch, isEndPoint=isEndPoint)
+        buildSubtreeFromGraph(skeletonGraph, skeletonPoints, startIdx=pointIndices[-1], nextIdx=s, parent=branch,
+                              isEndPoint=isEndPoint)
 
     return branch
 

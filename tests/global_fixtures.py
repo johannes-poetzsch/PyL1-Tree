@@ -8,24 +8,24 @@ import yaml
 from tests.utils.data_import import rootPath
 
 
-@pytest.fixture
+@pytest.fixture(scope='module')
 def base_point():
     data_path = "TestData/InputTlsPoints/base.mat"
     return loadmat(os.path.join(rootPath(), data_path))['basePoint'].squeeze()
 
 
-@pytest.fixture
+@pytest.fixture(scope='module')
 def base_radius():
     data_path = "TestData/InputTlsPoints/base.mat"
     return loadmat(os.path.join(rootPath(), data_path))['baseRadius'].squeeze()
 
 
-@pytest.fixture
+@pytest.fixture(scope='module')
 def initial_search_range(base_radius):
     return 0.1 * base_radius
 
 
-@pytest.fixture
+@pytest.fixture(scope='module')
 def parameters() -> Dict[str, Any]:
     if not hasattr(parameters, 'dict'):
         data_path = "TestData/parameters.yaml"
@@ -34,7 +34,7 @@ def parameters() -> Dict[str, Any]:
     return parameters.dict.copy()
 
 
-@pytest.fixture
+@pytest.fixture(scope='module')
 def tls_points(base_point) -> np.ndarray:
     if not hasattr(tls_points, 'pos'):
         data_path = "TestData/InputTlsPoints/Positions.txt"

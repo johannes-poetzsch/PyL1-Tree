@@ -25,8 +25,8 @@ def main():
         tlsPoints[:,2] = height
 
     seedPoints, relPathPositions, tlsPoints = generateSeeds(tlsPoints, parameters)
-    branches = generateBranches(tlsPoints, seedPoints, relPathPositions, parameters)
-    stem, prunedTlsPoints1 = constructTreeGraph(tlsPoints, branches, parameters)
+    branches, unfixedPoints = generateBranches(tlsPoints, seedPoints, relPathPositions, parameters)
+    stem, prunedTlsPoints1 = constructTreeGraph(tlsPoints, branches, unfixedPoints, parameters)
 
     adjustBifurcations(stem, parameters)
 

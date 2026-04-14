@@ -79,8 +79,8 @@ def stripPointsDistances(strip: npt.NDArray, # (L+1,D)
                          trimEnd = False,
                          returnTrimming = False,
                          returnPedalInfo = False
-                         ) -> (Tuple[npt.NDArray[np.double], npt.NDArray[np.double], npt.NDArray[np.intp], npt.NDArray[np.bool]] |
-                               Tuple[npt.NDArray[np.double], npt.NDArray[np.double], npt.NDArray[np.intp]] |
+                         ) -> (Tuple[npt.NDArray[np.double], npt.NDArray[np.double], npt.NDArray[np.intp], npt.NDArray[np.intp], npt.NDArray[np.bool]] |
+                               Tuple[npt.NDArray[np.double], npt.NDArray[np.double], npt.NDArray[np.intp], npt.NDArray[np.intp]] |
                                Tuple[npt.NDArray[np.double], npt.NDArray[np.bool]] |
                                npt.NDArray[np.double]):
     xp = cp.get_array_module(strip, points)
@@ -113,9 +113,10 @@ def stripPointsDistances(strip: npt.NDArray, # (L+1,D)
         atStartPoint = np.take_along_axis(tMatrix, closestSegment[np.newaxis], axis=0).squeeze(0) < 0.5
         closestPointIndices = np.where(atStartPoint, closestSegment, closestSegment+1)
         if returnTrimming:
-            return distances, pedalPoints, closestPointIndices, trimmed
+            return distances, pedalPoints, closestSegment, closestPointIndices, trimmed
         else:
-            return distances[untrimmed], pedalPoints[untrimmed], closestPointIndices[untrimmed]
+            return (distances[untrimmed], pedalPoints[untrimmed],
+                    closestSegment[untrimmed], closestPointIndices[untrimmed])
     else:
         if returnTrimming:
             return distances, trimmed

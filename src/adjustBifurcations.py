@@ -58,11 +58,11 @@ def applyAdjustment(stem: Branch,
         branch.updateSkeletonMeasurements()
         branch.unflip()
 
-    Branch.reassignPoints(list(breadthFirstSearch(stem)), changedBranches=associatedBranches,
-                   originalDistances=originalDistances, useTrimming=False)
+    Branch.reassignPoints(list(breadthFirstSearch(stem)), affectedBranches=associatedBranches,
+                          originalDistances=originalDistances, useTrimming=False)
 
     newParent = None
-    if len(adjustmentBranch.skeletonPoints) <= 1:
+    if len(adjustmentBranch) <= 1:
         # if the current parent is removed, save the new parent to adjust the new combined bifurcation
         newParent = adjustmentBranch.parent
         # branch can be removed
@@ -97,7 +97,7 @@ def determineAdjustment(associatedBranches: List[Branch],
         otherBranches = [b for b in associatedBranches if b is not targetBranch]
         targetPoints[targetBranch], interpolationIndices[targetBranch] = targetBranch.getInterpolation(parameters["resolution"]) # includes current bifurcation as invalid target point
         isCredible[targetBranch] = isBifurcationCredible(targetPoints[targetBranch], targetBranch, parentBranch, associatedBranches,
-                                                         parameters["minAngleThreshold"], parameters["maxAngleThreshold"])
+                                                         np.deg2rad(parameters["minAngleThreshold"]), np.deg2rad(parameters["maxAngleThreshold"]))
         newBifurcationLength[targetBranch], removedSegmentsLength[targetBranch] = getLengthMetrics(targetPoints[targetBranch], 
                                                                                                    otherBranches, 
                                                                                                    isCredible[targetBranch])
@@ -176,8 +176,7 @@ def getDistanceMetrics(targetPoints: npt.NDArray[np.double],
     # Distances to the new segments between the new bifurcation points (targetPoints) and the first remaining skeleton points of the other branches
     xp = cp.get_array_module(tlsPoints)
     targetPoints = xp.asarray(targetPoints)
-    distancesToNewBifurcation = xp.min(xp.stack([linesPointsDistances(targetPoints[1:][isCredible],
-                                                                      xp.asarray(b.skeletonPoints[1]), 
+    distancesToNewBifurcation = xp.min(xp.stack([linesPointsDistances(targetPoints[1:][isCredible], xp.asarray(b[1]),
                                                                       tlsPoints)
                                                  for b in otherBranches]),
                                        axis=0)
@@ -243,9 +242,6 @@ def isBifurcationCredible(targetPoints: npt.NDArray[np.double],
                           associatedBranches: List[Branch],
                           minAngleThreshold: float,
                           maxAngleThreshold: float) -> npt.NDArray[np.bool]:
-    minAngleThreshold = np.deg2rad(minAngleThreshold)
-    maxAngleThreshold = np.deg2rad(maxAngleThreshold)
-
     # The first target point is the current bifurcation and does not have to be checked
     # The last point does not have a next point, so it is nan
     targetPoints = targetPoints.copy()
@@ -273,7 +269,7 @@ def isBifurcationCredible(targetPoints: npt.NDArray[np.double],
         else:
             childDirectionAtBifurcation = normalizeVectors(childBranch.skeletonPoints[1] - targetPoints)
 
-        if len(childBranch.skeletonPoints) > 2:
+        if len(childBranch) > 2:
             childDirectionAfterBifurcation = normalizeVectors(
                 childBranch.skeletonPoints[2] - childBranch.skeletonPoints[1])
         else:

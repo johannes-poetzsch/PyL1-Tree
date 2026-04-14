@@ -20,7 +20,7 @@ def filterTreeBranches(stem: Branch,
 
     trimmedPoints2 = filterByInfluence(branches, generateSearchRanges(branches, useMedianForStem=True))
 
-    if pruneNewLeaves:
+    if pruneNewLeaves: # TODO: check this
         branches = list(breadthFirstSearch(stem))
         prunedBranches.extend(pruneLeafEnds(branches))
     else:
@@ -40,7 +40,7 @@ def filterByLength(branches: List[Branch],
 
     for branch in branches:
         if (branch.length < resolution * (branchSizeThreshold - 1)
-            and len(branch.skeletonPoints) < branchSizeThreshold):
+            and len(branch) < branchSizeThreshold):
 
             closeBranches = list(branch.children)
             if branch.parent is not None: 
@@ -74,7 +74,7 @@ def filterByInfluence(branches: List[Branch],
 
             distances = branch.getDistances(leaf.skeletonPoints, trimStart=True, trimEnd=True, returnTrimming=False)
 
-            if len(distances) > len(leaf.skeletonPoints) / 2 and aggregate(distances) < searchRange:
+            if len(distances) > len(leaf) / 2 and aggregate(distances) < searchRange:
                 removedPoints = leaf.remove()
                 closeBranches = [branch, leaf.parent]
                 trimmedPoints.append(Branch.assignLocalPoints(removedPoints, branches, closeBranches, useTrimming=True))
@@ -135,10 +135,7 @@ def pruneLeafEnds(branches: List[Branch]) -> List[Branch]:
         if len(branch.children) != 1:
             continue
         child = next(iter(branch.children))
-        if (not child.isLeaf() or
-                len(branch.skeletonPoints) < 3 or
-                len(child.skeletonPoints) < 3 or
-                not branch.isEndPoint(-2)):
+        if not child.isLeaf() or len(branch) < 3 or len(child) < 3 or not branch.isEndPoint(-2):
             branch.expand()
             continue
 
@@ -149,13 +146,13 @@ def pruneLeafEnds(branches: List[Branch]) -> List[Branch]:
         angleBeforeEnd = np.rad2deg(angle(endDirection, preEndDirection))
         angleAtEnd = np.rad2deg(angle(startDirection, endDirection))
 
-        pruneIdx = len(branch.skeletonPoints) - 2
+        pruneIdx = len(branch) - 2
         branch.expand()
 
         if not angleBeforeEnd + angleAtEnd > 150:
             continue
         else:
-            _, prunedEnd = branch.split(pruneIdx)
+            _, prunedEnd = branch.split(pruneIdx) # TODO: check split()
             if prunedEnd is not None:
                 prunedEnd.remove()
                 prunedBranches.append(prunedEnd)
@@ -167,9 +164,9 @@ def pruneThickeningLeaves(branches: List[Branch], branchSizeThreshold: int) -> n
     prunedPoints = []
 
     for leaf in branches:
-        if not leaf.isLeaf() or len(leaf.skeletonPoints) <= branchSizeThreshold:
+        if not leaf.isLeaf() or len(leaf) <= branchSizeThreshold:
             continue
-        _, _, closestPointIndices = stripPointsDistances(leaf.skeletonPoints, leaf.tlsPoints, returnPedalInfo=True)
+        _, _, _, closestPointIndices = stripPointsDistances(leaf.skeletonPoints, leaf.tlsPoints, returnPedalInfo=True)
 
         order = np.argsort(closestPointIndices)
         tlsPoints = leaf.tlsPoints[order]
@@ -210,7 +207,7 @@ def pruneUncenteredBranches(branches: List[Branch]) -> List[Branch]:
     for branch in branches:
         if branch.isRemoved:
             continue
-        distances, pedalPoints, _ = stripPointsDistances(branch.skeletonPoints, branch.tlsPoints, returnPedalInfo=True)
+        distances, pedalPoints, _, _ = stripPointsDistances(branch.skeletonPoints, branch.tlsPoints, returnPedalInfo=True)
 
         tlsPoints = branch.tlsPoints[distances > minDistance]
         pedalPoints = pedalPoints[distances > minDistance]

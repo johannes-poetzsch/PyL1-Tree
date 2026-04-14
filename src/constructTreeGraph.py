@@ -17,21 +17,22 @@ from src.utils.iteration import breadthFirstSearch
 
 def constructTreeGraph(tlsPoints: npt.NDArray[np.double],
                        branches: List[Branch],
+                       unfixedPoints: npt.NDArray[np.double],
                        parameters: Dict[str, Any],
                        heightAttribute: int = 2
                        ) -> Tuple[Branch, npt.NDArray[np.double]]:
     Branch.assignAllPoints(tlsPoints, branches, useTrimming=True)
     branches, _ = preFilterBranches(branches, parameters["baseRadius"])
-    addBranchEndPoints(branches)
+    branches = splitCrookedBranches(branches)
 
     componentStems = constructComponents(branches, parameters["minDistanceThreshold"], heightAttribute)
-    rootComponentStem = min(componentStems, key=lambda componentStem: componentStem.skeletonPoints[0][heightAttribute])
+    stem = min(componentStems, key=lambda componentStem: componentStem.skeletonPoints[0, heightAttribute])
 
     branches = list(chain.from_iterable([breadthFirstSearch(stem) for stem in componentStems]))
     trimmedPoints = Branch.assignAllPoints(tlsPoints, branches, useTrimming=True)
 
-    stem, prunedBranches, trimmedPoints = connectComponents(
-        rootComponentStem, componentStems, trimmedPoints,
+    prunedBranches, trimmedPoints = connectComponents(
+        stem, componentStems, unfixedPoints, trimmedPoints,
         parameters["minDistanceThreshold"], parameters["maxDistanceThreshold"],
         np.deg2rad(parameters["minAngleThreshold"]), np.deg2rad(parameters["maxAngleThreshold"]),
         parameters["resolution"], parameters["windowSize"], parameters["densityFactor"])
@@ -62,55 +63,40 @@ def addBasePoint(stem: Branch, basePoint: npt.NDArray[np.double], unassignedTlsP
     return unassignedTlsPoints
 
 
-def addBranchEndPoints(branches: List[Branch]):
-    for branch in branches:
-        if len(branch.skeletonPoints) < 4:
-            continue
-
-        startDirection = normalizeVectors(branch.skeletonPoints[1] - branch.skeletonPoints[0])
-        endDirection = normalizeVectors(branch.skeletonPoints[-1] - branch.skeletonPoints[-2])
-
-        if angle(startDirection, endDirection) < np.pi / 2:  # acute angle are fine
-            continue
-
-        firstPartDirections = normalizeVectors(branch.skeletonPoints[1:-2] - branch.skeletonPoints[0])
-        secondPartDirections = normalizeVectors(branch.skeletonPoints[-1] - branch.skeletonPoints[2:-1])
-
-        splitAngles = angle(firstPartDirections, secondPartDirections)
-        splitIdx = np.argmax(splitAngles) + 1
-
-        branch.addEndPoints([splitIdx, splitIdx + 1])
-
-
 def createSkeletonGraph(branches: List[Branch],
-                        skeletonPoints: npt.NDArray[np.double],
-                        isEndPoint: npt.NDArray[np.bool],
-                        minDistanceThreshold: float) -> nx.Graph:
+                        minDistanceThreshold: float
+                        ) -> Tuple[nx.Graph, npt.NDArray[np.double], npt.NDArray[bool]]:
+    skeletonPoints = np.concatenate([b.skeletonPoints for b in branches], axis=0)
+
+    isEndPoint = np.zeros(len(skeletonPoints), dtype=bool)
+    branchStartIdx = 0
+    for branch in branches:
+        isEndPoint[[branchStartIdx, branchStartIdx + len(branch) - 1]] = True
+        branchStartIdx += len(branch)
+    endPointIds = np.flatnonzero(isEndPoint)
+
     skeletonGraph = nx.Graph()
     skeletonGraph.add_nodes_from(range(len(skeletonPoints)))
 
     offset = 0
     for b in branches:
         pointPairs = [(offset + i, offset + i+1, np.linalg.norm(b.skeletonPoints[i+1] - b.skeletonPoints[i]))
-                      for i in range(len(b.skeletonPoints) - 1)]
+                      for i in range(len(b) - 1)]
         skeletonGraph.add_weighted_edges_from(pointPairs, weight="distance")
-        offset += len(b.skeletonPoints)
+        offset += len(b)
 
-    endPointIds = np.flatnonzero(isEndPoint)
     endPointsLookUp = KDTree(skeletonPoints[endPointIds])
     endPointNeighbors = endPointsLookUp.query_ball_tree(endPointsLookUp, minDistanceThreshold)
     for index1, neighbors in enumerate(endPointNeighbors):
         id1 = endPointIds[index1]
         for index2 in neighbors:
             id2 = endPointIds[index2]
-            if id1 >= id2:
-                continue
             distance = np.linalg.norm(skeletonPoints[id1] - skeletonPoints[id2])
             skeletonGraph.add_edge(id1, id2, distance=distance)
 
     skeletonGraph = nx.minimum_spanning_tree(skeletonGraph, weight="distance")
 
-    return skeletonGraph
+    return skeletonGraph, skeletonPoints, isEndPoint
 
 
 def constructComponents(branches: List[Branch],
@@ -118,22 +104,13 @@ def constructComponents(branches: List[Branch],
                         heightAttribute: int = 2) -> List[Branch]:
     componentStems = []
 
-    skeletonPoints = np.concatenate([b.skeletonPoints for b in branches], axis=0)
-
-    isEndPoint = np.empty(len(skeletonPoints), dtype=bool)
-    offset = 0
-    for branch in branches:
-        pointCount = len(branch.skeletonPoints)
-        isEndPoint[offset:offset+pointCount] = branch.isEndPoint(np.arange(pointCount, dtype=int))
-        offset += pointCount
-
-    skeletonGraph = createSkeletonGraph(branches, skeletonPoints, isEndPoint, minDistanceThreshold)
+    skeletonGraph, skeletonPoints, isEndPoint = createSkeletonGraph(branches, minDistanceThreshold)
     for c in nx.connected_components(skeletonGraph):
         if len(c) <= 1:
             raise ValueError("skeletonGraph should not contain single-point components")
         # find the terminal node with the lowest height
         terminalNodes = [node for node in c if skeletonGraph.degree(node) == 1]
-        rootNode = min(terminalNodes, key=lambda node: skeletonPoints[node][heightAttribute])
+        rootNode = min(terminalNodes, key=lambda node: skeletonPoints[node, heightAttribute])
 
         componentSkeletonGraph = nx.dfs_tree(skeletonGraph, rootNode)
         componentStem = buildSubtreeFromGraph(componentSkeletonGraph, skeletonPoints, rootNode, isEndPoint=isEndPoint)
@@ -165,3 +142,29 @@ def preFilterBranches(branches: List[Branch],
         if removedBranches else np.empty((0,3), dtype=np.double)
 
     return branches, prunedPoints
+
+
+def splitCrookedBranches(branches: List[Branch]):
+    straightBranches = []
+    for branch in branches:
+        if len(branch) < 4:
+            straightBranches.append(branch)
+            continue
+
+        startDirection = normalizeVectors(branch.skeletonPoints[1] - branch.skeletonPoints[0])
+        endDirection = normalizeVectors(branch.skeletonPoints[-1] - branch.skeletonPoints[-2])
+
+        if angle(startDirection, endDirection) < np.pi / 2:  # acute angles are fine
+            straightBranches.append(branch)
+            continue
+
+        firstPartDirections = normalizeVectors(branch.skeletonPoints[1:-2] - branch.skeletonPoints[0])
+        secondPartDirections = normalizeVectors(branch.skeletonPoints[-1] - branch.skeletonPoints[2:-1])
+
+        splitAngles = angle(firstPartDirections, secondPartDirections)
+        splitIdx = np.argmax(splitAngles) + 1
+
+        splitBranches = [Branch(branch.skeletonPoints[:splitIdx+1]), Branch(branch.skeletonPoints[splitIdx+1:])]
+        straightBranches.extend(splitBranches)
+
+    return straightBranches
