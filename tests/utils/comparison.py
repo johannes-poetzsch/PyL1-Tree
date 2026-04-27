@@ -4,11 +4,11 @@ from src.objects.branch import Branch
 
 
 def branches_are_equal(branch1: Branch, branch2: Branch, compareTlsPoints: bool = True):
-    if not np.array_equal(branch1.skeletonPoints, branch2.skeletonPoints):
+    if len(branch1) != len(branch2) or not np.allclose(branch1.skeletonPoints, branch2.skeletonPoints):
         return False
 
     if compareTlsPoints:
-        return np.array_equal(branch1.tlsPoints.sort(axis=0), branch2.tlsPoints.sort(axis=0))
+        return np.allclose(branch1.tlsPoints.sort(axis=0), branch2.tlsPoints.sort(axis=0))
     else:
         return True
 

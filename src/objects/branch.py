@@ -6,27 +6,31 @@ import numpy.typing as npt
 from scipy.spatial import KDTree
 from typing import Iterable, List, Optional, Tuple
 
+from src.objects.boundedObject import BoundedObject
 from src.utils.geometry import getStripAngles, linesPointsDistances, stripPointsDistances
 
 
-class Branch:
+class Branch(BoundedObject):
     idGenerator = count()
 
     def __init__(self,
                  skeletonPoints: npt.NDArray[np.double],
                  tlsPoints: Optional[npt.NDArray[np.double]] = None,
                  parent: Branch = None):
+        BoundedObject.__init__(self, None, None)
+
         self.id = next(Branch.idGenerator)
         self.isFlipped = False
         self.skeletonPoints = skeletonPoints
         self.endPointIndices: Optional[List[int]] = None
+        self.temporaryIndices: Optional[List[int]] = None
         self.tlsPoints = np.empty([0,3], dtype=np.double) if tlsPoints is None else tlsPoints
         self.children: set[Branch] = set()
 
         self.parent: Optional[Branch] = None
         self.setParent(parent)
 
-        self.boundingBoxMax, self.boundingBoxMin, self.length = None, None, None
+        self.length = None
         self.updateSkeletonMeasurements()
 
         self.isRemoved = False
@@ -137,7 +141,32 @@ class Branch:
             restBranchDistances = xp.full(segmentDistances.shape[1], xp.inf, dtype=xp.double)
 
         return firstSegmentDistances, restBranchDistances
-    
+
+
+    def interpolate(self, resolution: float, temporary: bool = False):
+        interpolation, interpolationIndices = self.getInterpolation(resolution)
+        _, originalIndices = np.unique(interpolationIndices, return_index=True)
+
+        self.skeletonPoints = interpolation
+
+        if self.endPointIndices is not None:
+            self.endPointIndices = originalIndices[self.endPointIndices]
+
+        if temporary:
+            self.temporaryIndices = [idx for idx in range(len(self.skeletonPoints)) if idx not in originalIndices]
+
+
+    def removeTemporaryPoints(self):
+        if self.temporaryIndices is None:
+            return
+        originalIndices = [idx for idx in range(len(self.skeletonPoints)) if idx not in self.temporaryIndices]
+        self.skeletonPoints = self.skeletonPoints[originalIndices]
+
+        if self.endPointIndices is not None:
+            self.endPointIndices = [newIdx for newIdx, idx in enumerate(originalIndices) if self.isEndPoint(idx)]
+
+        self.temporaryIndices = None
+
 
     def updateSkeletonMeasurements(self):
         self.boundingBoxMin = np.min(self.skeletonPoints, axis=0)
@@ -147,38 +176,29 @@ class Branch:
         self.length = np.linalg.norm(segments, axis=-1).sum()
 
 
-    def getBoundingBoxDistance(self, boundingBoxMin: np.double, boundingBoxMax: np.double):
-        delta1 = np.clip(self.boundingBoxMin - boundingBoxMax, a_min=0, a_max=None)
-        delta2 = np.clip(boundingBoxMin - self.boundingBoxMax, a_min=0, a_max=None)
-        return np.linalg.norm(delta1 + delta2, axis=-1)
-
-
-    def branchBoundingBoxDistance(self, other: Branch):
-        return self.getBoundingBoxDistance(other.boundingBoxMin, other.boundingBoxMax)
-
-
-    def expand(self):
+    def expand(self) -> Branch:
         if len(self.children) != 1:
             raise ValueError("Only branches with a single child branch can be expanded")
-        child = self.children.pop()
+        removedChild = next(iter(self.children))
 
-        if self.isFlipped or child.isFlipped:
+        if self.isFlipped or removedChild.isFlipped:
             raise ValueError("Ensure branches are not flipped before expanding!")
 
         originalPointCount = len(self)
-        self.skeletonPoints = np.append(self.skeletonPoints, child.skeletonPoints[1:], axis=0)
-        self.addEndPoints([originalPointCount-1])
-        if child.endPointIndices is not None:
-            self.addEndPoints([len(self.skeletonPoints)-1 + idx for idx in child.endPointIndices
-                               if idx not in [0, len(child.skeletonPoints) - 1]])
-
-        xp = cp.get_array_module(self.tlsPoints, child.tlsPoints)
-        self.tlsPoints = xp.append(self.tlsPoints, child.tlsPoints, axis=0)
-
-        for newChild in list(child.children):
-            newChild.setParent(self)
-
+        self.tlsPoints = np.append(self.tlsPoints, removedChild.remove(adjustConnectedBranches=False), axis=0)
+        self.skeletonPoints = np.append(self.skeletonPoints, removedChild.skeletonPoints[1:], axis=0)
         self.updateSkeletonMeasurements()
+
+        self.addEndPoints([originalPointCount-1])
+        if removedChild.endPointIndices is not None:
+            self.addEndPoints([len(self.skeletonPoints)-1 + idx for idx in removedChild.endPointIndices
+                               if idx not in [0, len(removedChild.skeletonPoints) - 1]])
+        if removedChild.temporaryIndices is not None:
+            if self.temporaryIndices is None:
+                self.temporaryIndices = []
+            self.temporaryIndices.extend([idx + originalPointCount - 1 for idx in removedChild.temporaryIndices])
+
+        return removedChild
 
 
     def remove(self, adjustConnectedBranches: bool = True) -> npt.NDArray[np.double]:
@@ -186,7 +206,7 @@ class Branch:
         parent = self.parent
         self.setParent(None)
 
-        for child in self.children.copy():
+        for child in list(self.children):
             if adjustConnectedBranches:
                 assert(not self.isFlipped)
                 assert(not child.isFlipped)
@@ -208,6 +228,8 @@ class Branch:
         self.skeletonPoints = np.flipud(self.skeletonPoints)
         if self.endPointIndices is not None:
             self.endPointIndices = [len(self.skeletonPoints)-1 - idx for idx in self.endPointIndices]
+        if self.temporaryIndices is not None:
+            self.temporaryIndices = [len(self.temporaryIndices) - 1 - idx for idx in self.temporaryIndices]
 
         if self.parent is not None:
             self.parent.reorientSubtree(self)
@@ -240,6 +262,10 @@ class Branch:
                     self.addEndPoints([idx])
                 else:
                     splitEnd.addEndPoints([idx - splitIdx])
+
+        if self.temporaryIndices is not None:
+            splitEnd.temporaryIndices = [idx - splitIdx for idx in self.temporaryIndices if idx > splitIdx]
+            self.temporaryIndices = [idx for idx in self.temporaryIndices if idx < splitIdx]
 
         self.updateSkeletonMeasurements()
 
@@ -319,6 +345,8 @@ class Branch:
                             initialDistances: Optional[npt.NDArray[np.double]] = None,
                             useTrimming = False
                             ) -> Tuple[npt.NDArray[np.intp], npt.NDArray[np.double]]:
+        if len(points) == 0:
+            return np.empty(0, dtype=np.intp), np.empty(0, dtype=np.double)
         xp = cp.get_array_module(points)
         pointsMin = points.min(axis=0)
         pointsMax = points.max(axis=0)

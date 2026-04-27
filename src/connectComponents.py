@@ -3,11 +3,13 @@ import networkx as nx
 import numpy as np
 import numpy.typing as npt
 from scipy.spatial import KDTree
-from typing import Dict, List, Optional, Set, Tuple
+from typing import List, Optional, Set, Tuple
 
 from src.objects.branch import Branch
-from src.objects.component import ConnectedComponent, UnconnectedComponent
-from src.scoreConnection import scoreConnection
+from src.objects.connectedComponent import ConnectedComponent
+from src.objects.unconnectedComponent import UnconnectedComponent
+from src.objects.connection import Connection
+from src.objects.tlsPointManager import TlsPointManager
 from src.utils.iteration import breadthFirstSearch
 
 
@@ -21,56 +23,43 @@ def connectComponents(trunk: Branch,
                       maxAngleThreshold: float,
                       resolution: float,
                       windowSize: float,
-                      densityFactor: float
+                      densityFactor: float,
+                      stepSize: Optional[float] = None
                       ) -> Tuple[List[Branch], npt.NDArray[np.double]]:
+    rootComponent = ConnectedComponent(list(breadthFirstSearch(trunk)))
+    connectedComponents = {rootComponent}
     unconnectedComponents = {UnconnectedComponent(list(breadthFirstSearch(stem)))
                              for stem in componentStems if stem is not trunk}
 
     originalComponentCount = len(componentStems)
+    branches = list(chain(breadthFirstSearch(trunk),
+                          chain.from_iterable([c.branches for c in unconnectedComponents])))
 
-    allBranches: Set[Branch] = set(chain(breadthFirstSearch(trunk),
-                                         chain.from_iterable([c.branches for c in unconnectedComponents])))
+    tlsManager = TlsPointManager(branches, unassignedPoints)
 
     unfixedLookUp, unfixedWrapper = KDTree(unfixedPoints), Branch(unfixedPoints)
-    potentialConnections = generatePotentialConnections(allBranches, unfixedLookUp, unfixedWrapper, minDistanceThreshold)
-
-    assignedPoints = np.concatenate([b.tlsPoints for b in allBranches], axis=0)
-    assignedPointsDistances = np.concatenate([b.getDistances(b.tlsPoints) for b in allBranches], axis=0)
-    assignedPointsLookUp = KDTree(assignedPoints)
-
-    unassignedPointsDistances = Branch.findMinBranchDistances(unassignedPoints, allBranches)
-    unassignedPointsLookUp = KDTree(unassignedPoints)
-
-    rootComponent = ConnectedComponent(list(breadthFirstSearch(trunk)),
-                                       assignedPointsLookUp, assignedPointsDistances)
-    connectedComponents = {rootComponent}
+    potentialConnections = generatePotentialConnections(branches, unfixedLookUp, unfixedWrapper, minDistanceThreshold)
 
     originalMaxDistanceThreshold = maxDistanceThreshold
     maxConnectionLength = 2.0
-    originalBranchIndices = {}
 
     while unconnectedComponents:
         for component in connectedComponents:
             if component.checkedDistanceThreshold < maxDistanceThreshold:
                 for otherComponent in unconnectedComponents:
-                    if component.getBoundingBoxDistance(otherComponent) <= maxDistanceThreshold:
-                        findConnections(component, otherComponent, potentialConnections,
-                                        unassignedPointsLookUp, unassignedPointsDistances,
+                    if component.getObjectBBDistance(otherComponent) <= maxDistanceThreshold:
+                        findConnections(component, otherComponent, potentialConnections, tlsManager,
                                         minDistanceThreshold, maxDistanceThreshold,
                                         minAngleThreshold, maxAngleThreshold,
-                                        windowSize, densityFactor)
+                                        windowSize, densityFactor, stepSize)
                 component.checkedDistanceThreshold = maxDistanceThreshold
 
         connectableComponents = [c for c in unconnectedComponents if len(c.connections) > 0]
 
         if len(connectableComponents) > 0:
-            connectionBranch, splitEnd = connectComponent(max(connectableComponents, key=lambda c: c.connections[0]),
-                                                          unconnectedComponents, connectedComponents, allBranches,
-                                                          assignedPointsLookUp, assignedPointsDistances,
-                                                          originalBranchIndices, resolution,
-                                                          maxConnectionLength, maxAngleThreshold, maxDistanceThreshold)
-
-            updateTlsData(allBranches)
+            connectionBranch, splitEnd = connectComponent(max(connectableComponents, key=lambda c: c.connections[0].score),
+                                                          unconnectedComponents, connectedComponents, tlsManager,
+                                                          resolution)
 
             updatePotentialConnections(potentialConnections, unfixedLookUp, unfixedWrapper, connectionBranch, splitEnd,
                                        minDistanceThreshold)
@@ -82,16 +71,13 @@ def connectComponents(trunk: Branch,
                 break
             maxDistanceThreshold += 0.2
 
-    for branch, originalIndices in originalBranchIndices.items():
-        branch.skeletonPoints = branch.skeletonPoints[originalIndices]
+    trimmedPoints = tlsManager.releasePoints()
+    for branch in reversed(list(breadthFirstSearch(trunk))):
+        branch.removeTemporaryPoints()
+        if len(branch.children) == 1:
+            branch.expand()
 
-    treeBranches = list(breadthFirstSearch(trunk))
     prunedBranches = list(chain.from_iterable([uc.branches for uc in unconnectedComponents]))
-    allBranches = list(chain(treeBranches, prunedBranches))
-
-    trimmedPoints1 = Branch.reassignPoints(treeBranches, useTrimming=True)
-    trimmedPoints2 = Branch.assignAllPoints(unassignedPoints, allBranches, useTrimming=True)
-    trimmedPoints = np.concatenate((trimmedPoints1, trimmedPoints2), axis=0)
 
     return prunedBranches, trimmedPoints
 
@@ -99,40 +85,22 @@ def connectComponents(trunk: Branch,
 def connectComponent(connectionComponent: UnconnectedComponent,
                      unconnectedComponents: Set[UnconnectedComponent],
                      connectedComponents: Set[ConnectedComponent],
-                     allBranches: Set[Branch],
-                     assignedPointsLookUp: KDTree,
-                     assignedPointsDistances: npt.NDArray[np.double],
-                     originalBranchIndices: Dict[Branch, npt.NDArray[np.intp]],
+                     tlsManager: TlsPointManager,
                      resolution: float,
-                     maxConnectionLength: float,
-                     minAngleThreshold: float,
-                     minDistanceThreshold: float,
                      ) -> Tuple[Branch, Optional[Branch]]:
     unconnectedComponents.remove(connectionComponent)
-    connectionComponent, connectionBranch, splitEnd = connectionComponent.connect(assignedPointsLookUp,
-                                                                                  assignedPointsDistances)
+    connection = connectionComponent.connections[0]
+    connectionComponent, connectionBranch, splitEnd = connectionComponent.connect(tlsManager, resolution)
     connectedComponents.add(connectionComponent)
-
-    interpolation, interpolationIndices = connectionBranch.getInterpolation(resolution)
-    connectionBranch.skeletonPoints = interpolation
-
-    _, originalIndices = np.unique(interpolationIndices, return_index=True)
-    originalBranchIndices[connectionBranch] = originalIndices
 
     if splitEnd is not None:
         splitBranch = splitEnd.parent
         for component in connectedComponents:
             if splitBranch in component.directionData:
                 del component.directionData[splitBranch]
-        if splitBranch in originalBranchIndices:
-            originalIndices = originalBranchIndices[splitBranch]
-            splitIdx = len(splitBranch) - 1
-            originalBranchIndices[splitEnd] = np.insert(originalIndices[originalIndices > splitIdx] - splitIdx, 0, 0)
-            originalBranchIndices[splitBranch] = np.append(originalIndices[originalIndices < splitIdx], splitIdx)
 
     for component in unconnectedComponents:
-        if component.getBoundingBoxDistance(connectionBranch[0]) <= maxConnectionLength:
-            component.updateConnections(connectionBranch, minAngleThreshold, minDistanceThreshold)
+        component.updateConnections(connection, connectionBranch)
 
     return connectionBranch, splitEnd
 
@@ -140,45 +108,40 @@ def connectComponent(connectionComponent: UnconnectedComponent,
 def findConnections(connectedComponent: ConnectedComponent,
                     unconnectedComponent: UnconnectedComponent,
                     potentialConnections: nx.Graph,
-                    unassignedPointsLookUp: KDTree,
-                    unassignedPointsDistances: npt.NDArray[np.double],
+                    tlsManager: TlsPointManager,
                     minDistanceThreshold: float,
                     maxDistanceThreshold: float,
                     minAngleThreshold: float,
                     maxAngleThreshold: float,
                     windowSize: float,
-                    densityFactor: float):
+                    densityFactor: float,
+                    stepSize: Optional[float] = None):
     for endBranch in unconnectedComponent.branches:
-        if connectedComponent.getBoundingBoxDistance(endBranch) > maxDistanceThreshold:
+        if connectedComponent.getObjectBBDistance(endBranch) > maxDistanceThreshold:
             continue
         directionsAtEnd = unconnectedComponent.getDirectionData(endBranch, minDistanceThreshold)
 
         for startBranch in connectedComponent.branches:
-            if startBranch.branchBoundingBoxDistance(endBranch) > maxDistanceThreshold:
+            if startBranch.getObjectBBDistance(endBranch) > maxDistanceThreshold:
                 continue
-            directionsAtStart = connectedComponent.getDirectionData(startBranch, minDistanceThreshold)
-            searchRange = connectedComponent.searchRanges[startBranch]
 
             for endIdx, startDirection, childDirections in directionsAtEnd:
-                for startIdx, parentDirections, siblingDirections in directionsAtStart:
+                for startIdx in range(1, len(startBranch)):
                     startPoint = startBranch[startIdx]
                     endPoint = endBranch[endIdx]
                     connectionLength = np.linalg.norm(endPoint - startPoint)
 
-                    if (connectionLength > maxDistanceThreshold or
-                            connectionLength <= connectedComponent.checkedDistanceThreshold):
+                    if (connectionLength > maxDistanceThreshold
+                            or connectionLength <= connectedComponent.checkedDistanceThreshold):
                         continue
 
                     # score the direct connection between the points
                     connectionLine = np.stack((startPoint, endPoint))
-                    startTlsPoints, startTlsDistances = connectedComponent.getTlsData(startBranch, startIdx)
-                    score = scoreConnection(connectionLine, searchRange,
-                                            startDirection, childDirections, parentDirections, siblingDirections,
-                                            startTlsPoints, startTlsDistances,
-                                            unassignedPointsLookUp, unassignedPointsDistances,
-                                            minAngleThreshold, maxAngleThreshold, windowSize, densityFactor)
-                    if score is not None:
-                        connection = (score, startBranch, startIdx, endBranch, endIdx, connectionLine, connectedComponent)
+                    connection = Connection(connectionLine, tlsManager,
+                                            startBranch, startIdx, connectedComponent, endBranch, endIdx,
+                                            startDirection, childDirections, minDistanceThreshold,
+                                            minAngleThreshold, maxAngleThreshold, windowSize, densityFactor, stepSize)
+                    if connection.isCredible:
                         unconnectedComponent.connections.append(connection)
 
                     try:
@@ -188,16 +151,14 @@ def findConnections(connectedComponent: ConnectedComponent,
                         continue
 
                     connectionStrip = np.stack([branch.skeletonPoints[idx] for branch, idx in path])
-                    score = scoreConnection(connectionStrip, searchRange,
-                                            startDirection, childDirections, parentDirections, siblingDirections,
-                                            startTlsPoints, startTlsDistances,
-                                            unassignedPointsLookUp, unassignedPointsDistances,
+                    connection = Connection(connectionStrip, tlsManager,
+                                            startBranch, startIdx, connectedComponent, endBranch, endIdx,
+                                            startDirection, childDirections, minDistanceThreshold,
                                             minAngleThreshold, maxAngleThreshold, windowSize, densityFactor)
-                    if score is not None:
-                        connection = (score, startBranch, startIdx, endBranch, endIdx, connectionStrip, connectedComponent)
+                    if connection.isCredible:
                         unconnectedComponent.connections.append(connection)
 
-    unconnectedComponent.connections.sort(key=lambda c: c[0], reverse=True)
+    unconnectedComponent.connections.sort(key=lambda c: c.score, reverse=True)
 
 
 def generatePotentialConnections(branches: List[Branch],

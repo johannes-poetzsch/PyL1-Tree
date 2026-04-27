@@ -1,6 +1,8 @@
+from itertools import combinations
+
 import numpy as np
 import os
-from typing import Optional
+from typing import List, Optional
 
 from src.objects.branch import Branch
 
@@ -45,3 +47,17 @@ def import_branches(directory_path: str,
             branches.append(branch)
 
     return branches
+
+
+def connect_branches(branches: List[Branch]) -> Branch:
+    for b1, b2 in combinations(branches, 2):
+        if np.all(b1[0] == b2[-1]):
+            b1.setParent(b2)
+        elif np.all(b2[0] == b1[-1]):
+            b2.setParent(b1)
+
+    trunk = branches[0]
+    while not trunk.isStem():
+        trunk = trunk.parent
+
+    return trunk

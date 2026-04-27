@@ -69,7 +69,7 @@ def filterByInfluence(branches: List[Branch],
             continue
 
         for leaf in leaves:
-            if leaf is branch or leaf.isRemoved or branch.branchBoundingBoxDistance(leaf) >= searchRange:
+            if leaf is branch or leaf.isRemoved or branch.getObjectBBDistance(leaf) >= searchRange:
                 continue
 
             distances = branch.getDistances(leaf.skeletonPoints, trimStart=True, trimEnd=True, returnTrimming=False)

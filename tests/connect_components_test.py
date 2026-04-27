@@ -7,11 +7,13 @@ from scipy.spatial import KDTree
 
 from src.connectComponents import connectComponents, findConnections, generatePotentialConnections
 from src.objects.branch import Branch
-from src.objects.component import ConnectedComponent, UnconnectedComponent
+from src.objects.connectedComponent import ConnectedComponent
+from src.objects.unconnectedComponent import UnconnectedComponent
+from src.objects.tlsPointManager import TlsPointManager
 from src.utils.iteration import breadthFirstSearch
 from tests.global_fixtures import base_point, base_radius, parameters, tls_points
 from tests.utils.comparison import branches_are_equal, subtrees_are_equal
-from tests.utils.data_import import import_branches, rootPath
+from tests.utils.data_import import connect_branches, import_branches, rootPath
 
 
 @pytest.fixture
@@ -28,14 +30,7 @@ def components_stems(branches):
     component_stems = []
     for component_id in np.unique(component_ids):
         component_branches = [b for b, cid in zip(branches, component_ids) if cid == component_id]
-        component_stems.append(component_branches[0])
-        start_points = np.array([b[0] for b in component_branches])
-        end_points = np.array([b[-1] for b in component_branches])
-        for i, j in combinations(range(len(component_branches)), 2):
-            if np.all(end_points[i] == start_points[j]):
-                component_branches[j].setParent(component_branches[i])
-            elif np.all(end_points[j] == start_points[i]):
-                component_branches[i].setParent(component_branches[j])
+        component_stems.append(connect_branches(component_branches))
 
     component_stems.sort(key=lambda c: min([b.skeletonPoints[:,2].min() for b in breadthFirstSearch(c)]))
     return component_stems
@@ -105,6 +100,20 @@ def skeleton_points(unfixed_points):
     return np.append(branch_skeleton_points, unfixed_points, axis=0)
 
 
+@pytest.fixture
+def skeleton_points_after_connection():
+    with open(os.path.join(rootPath(), "TestData/constructTreeGraph/connectionResult/skeletonPoints.txt")) as f:
+        skeletonPoints = np.loadtxt(f, dtype=np.double)
+    return skeletonPoints
+
+
+@pytest.fixture
+def tree_graph_after_connection(skeleton_points_after_connection):
+    tree_branches = import_branches("TestData/constructTreeGraph/connectionResult", skeleton_points_after_connection)
+    trunk = connect_branches(tree_branches)
+    return trunk
+
+
 @pytest.fixture(scope='module')
 def assigned_points(is_trimmed, tls_points):
     return tls_points[~is_trimmed]
@@ -153,38 +162,35 @@ def test_generate_potential_connections(potential_connection_edges, branches, un
 def test_find_connections(connection_type, branches, components_stems, connection_strategies, parameters, potential_connections,
                           assigned_points, assigned_distances, unassigned_points, unassigned_distances):
     if connection_type == "simple connections":
-        component_idx = 1
+        component_idx = 2
     elif connection_type == "indirect connections":
         component_idx = 51
 
-    assigned_points_look_up = KDTree(assigned_points)
     Branch.assignAllPoints(assigned_points, branches)
+    tlsManager = TlsPointManager(branches, unassigned_points)
 
-    root_component = ConnectedComponent(list(breadthFirstSearch(components_stems[0])), assigned_points_look_up, assigned_distances)
+    root_component = ConnectedComponent(list(breadthFirstSearch(components_stems[0])))
     other_component = UnconnectedComponent(list(breadthFirstSearch(components_stems[component_idx])))
 
-    findConnections(root_component, other_component, potential_connections,
-                    KDTree(unassigned_points), unassigned_distances,
+    findConnections(root_component, other_component, potential_connections, tlsManager,
                     parameters["minDistanceThreshold"], parameters["maxDistanceThreshold"],
                     np.deg2rad(parameters["minAngleThreshold"]), np.deg2rad(parameters["maxAngleThreshold"]),
-                    parameters["windowSize"], parameters["densityFactor"])
+                    parameters["windowSize"], parameters["densityFactor"], 0.01)
 
     connections = other_component.connections
 
     expected_connections = connection_strategies[component_idx]
     assert len(connections) == len(expected_connections)
     for connection, expected_connection in zip(connections, expected_connections):
-        connection_strip = connection[5]
-        expected_connection_strip \
-            = np.flipud(expected_connection[-1])
-        np.testing.assert_array_equal(connection_strip, expected_connection_strip)
+        expected_connection_strip = np.flipud(expected_connection[-1])
+        np.testing.assert_array_equal(connection.strip, expected_connection_strip)
 
-        score = connection[0]
         expected_score = expected_connection[0]
-        assert score == pytest.approx(expected_score)
+        assert connection.score == pytest.approx(expected_score)
 
 
-def test_connect_components(branches, components_stems, parameters, unfixed_points, assigned_points, unassigned_points):
+def test_connect_components(branches, components_stems, parameters, unfixed_points, assigned_points, unassigned_points,
+                            tree_graph_after_connection):
     Branch.assignAllPoints(assigned_points, branches)
 
     trunk = components_stems[0]
@@ -192,8 +198,6 @@ def test_connect_components(branches, components_stems, parameters, unfixed_poin
     connectComponents(trunk, components_stems, unfixed_points, unassigned_points,
                       parameters["minDistanceThreshold"], parameters["maxDistanceThreshold"],
                       np.deg2rad(parameters["minAngleThreshold"]), np.deg2rad(parameters["maxAngleThreshold"]),
-                      parameters["resolution"], parameters["windowSize"], parameters["densityFactor"])
+                      parameters["resolution"], parameters["windowSize"], parameters["densityFactor"], 0.01)
 
-    assert True
-
-
+    assert subtrees_are_equal(trunk, tree_graph_after_connection, compareTlsPoints=False)
