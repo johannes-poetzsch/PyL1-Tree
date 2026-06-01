@@ -6,7 +6,7 @@ import numpy.typing as npt
 import torch
 
 from itertools import combinations
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from src.objects.branch import Branch
 from src.utils.geometry import linesPointsDistances, normalizeVectors, angle
@@ -14,25 +14,25 @@ from src.utils.iteration import breadthFirstSearch
 #from src.utils.kernels import cum_min
 
 
-def adjustBifurcations(stem, parameters):
+def adjustBifurcations(trunk: Branch, parameters: Dict[str, Any]):
     xp = np
-
-    for parent in breadthFirstSearch(stem, returnLeaves=False):
+    for parent in breadthFirstSearch(trunk, returnLeaves=False):
         adjustmentCompleted = False
         while not adjustmentCompleted:
             if parent is None or parent.isRemoved or len(parent.children) < 2:
                 break
-
             associatedBranches = [parent] + list(parent.children)
 
             # make sure bifurcation is start of each associated branch
             parent.flip()
             
             tlsPoints = xp.asarray(xp.concatenate([b.tlsPoints for b in associatedBranches]))
-            adjustmentIdx, adjustmentPoint, adjustmentBranch = determineAdjustment(associatedBranches, parent, tlsPoints, parameters)
+            adjustmentIdx, adjustmentPoint, adjustmentBranch = determineAdjustment(
+                associatedBranches, parent, tlsPoints, parameters["resolution"],
+                np.deg2rad(parameters["minAngleThreshold"]), np.deg2rad(parameters["maxAngleThreshold"]))
 
             newParent = parent if adjustmentIdx is None else (
-                applyAdjustment(stem, associatedBranches, adjustmentIdx, adjustmentPoint, adjustmentBranch))
+                applyAdjustment(trunk, associatedBranches, adjustmentIdx, adjustmentPoint, adjustmentBranch))
 
             parent.unflip()
 
@@ -49,17 +49,12 @@ def applyAdjustment(stem: Branch,
                     adjustmentPoint: npt.NDArray[np.double],
                     adjustmentBranch: Branch
                     ) -> Branch:
-    originalDistances = [b.getDistances(b.tlsPoints) for b in associatedBranches]
-
     adjustmentBranch.skeletonPoints = adjustmentBranch.skeletonPoints[adjustmentIdx:]
 
     for branch in associatedBranches:
         branch.skeletonPoints[0] = adjustmentPoint
         branch.updateSkeletonMeasurements()
         branch.unflip()
-
-    Branch.reassignPoints(list(breadthFirstSearch(stem)), affectedBranches=associatedBranches,
-                          originalDistances=originalDistances, useTrimming=False)
 
     newParent = None
     if len(adjustmentBranch) <= 1:
@@ -72,13 +67,19 @@ def applyAdjustment(stem: Branch,
                                  closeBranches=associatedBranches,
                                  useTrimming=False)
 
+    originalDistances = [b.getDistances(b.tlsPoints) for b in associatedBranches]
+    Branch.reassignPoints(list(breadthFirstSearch(stem)), affectedBranches=associatedBranches,
+                          originalDistances=originalDistances, useTrimming=False)
+
     return newParent
 
 
 def determineAdjustment(associatedBranches: List[Branch],
                         parentBranch: Branch,
                         tlsPoints: npt.NDArray[cp.double],
-                        parameters: Dict[str, any]
+                        resolution: float,
+                        minAngleThreshold: float,
+                        maxAngleThreshold: float
                         ) -> Tuple[Optional[int], Optional[npt.NDArray[np.double]], Optional[Branch]]:
     firstSegmentDistances = {}
     restBranchDistances = {}
@@ -95,9 +96,9 @@ def determineAdjustment(associatedBranches: List[Branch],
     isCredible: Dict[Branch, npt.NDArray[np.bool]] = {}
     for targetBranch in associatedBranches:
         otherBranches = [b for b in associatedBranches if b is not targetBranch]
-        targetPoints[targetBranch], interpolationIndices[targetBranch] = targetBranch.getInterpolation(parameters["resolution"]) # includes current bifurcation as invalid target point
-        isCredible[targetBranch] = isBifurcationCredible(targetPoints[targetBranch], targetBranch, parentBranch, associatedBranches,
-                                                         np.deg2rad(parameters["minAngleThreshold"]), np.deg2rad(parameters["maxAngleThreshold"]))
+        targetPoints[targetBranch], interpolationIndices[targetBranch] = targetBranch.getInterpolation(resolution) # includes current bifurcation as invalid target point
+        isCredible[targetBranch] = isBifurcationCredible(targetPoints[targetBranch], targetBranch, parentBranch,
+                                                         associatedBranches, minAngleThreshold, maxAngleThreshold)
         newBifurcationLength[targetBranch], removedSegmentsLength[targetBranch] = getLengthMetrics(targetPoints[targetBranch], 
                                                                                                    otherBranches, 
                                                                                                    isCredible[targetBranch])
@@ -114,9 +115,9 @@ def determineAdjustment(associatedBranches: List[Branch],
                 continue
 
             otherBranches = [b for b in associatedBranches if b is not targetBranch]
-            newDistancesSum, associatedTlsToRemovedSegmentsSum, associatedTlsToNewBifurcationSum, associatedTlsCount = getDistanceMetrics(
-                targetPoints[targetBranch], otherBranches, pointBatch, 
-                isCredible[targetBranch], firstSegmentDistances, restBranchDistances)
+            newDistancesSum, associatedTlsToRemovedSegmentsSum, associatedTlsToNewBifurcationSum, associatedTlsCount = (
+                getDistanceMetrics(targetPoints[targetBranch], otherBranches, pointBatch,
+                                   isCredible[targetBranch], firstSegmentDistances, restBranchDistances))
             
             if targetBranch in associatedTlsCounts:
                 newDistancesSums[targetBranch] += newDistancesSum

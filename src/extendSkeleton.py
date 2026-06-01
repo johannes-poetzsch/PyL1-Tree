@@ -9,137 +9,87 @@ from typing import Dict, List, Optional
 
 from src.objects.branch import Branch
 from src.utils.branchUtils import buildSubtreeFromGraph
-from src.utils.geometry import angle, normalizeVectors
+from src.utils.geometry import angle, distanceAlongDirection, getValueOccurrences, normalizeVectors
 from src.utils.iteration import breadthFirstSearch
 
 
-def extendSkeleton(stem: Branch, 
+def extendSkeleton(trunk: Branch,
                    unassignedTlsPoints: npt.NDArray[np.double],
                    parameters: Dict[str, any]
                    ) -> npt.NDArray[np.double]:
-    clusters = getClusters(unassignedTlsPoints, 
-                           radius=stem.getDistances(stem.tlsPoints).mean() / 2,
-                           minSize=parameters["branchSizeThreshold"] ** 2)
-    
-    skeletonLookUp, treeSkeletonPoints = getSkeletonPointLookUp(stem)
-    (iSkeletonLookUp, iTreeSkeletonPoints, branches, 
-     iSkeletonBranchIndices, interpolationIndices) = getInterpolatedSkeletonLookUp(stem, parameters["resolution"])
+    clusters = getClusters(unassignedTlsPoints,
+                           radius=trunk.getDistances(trunk.tlsPoints).mean() / 2,
+                           minClusterSize=parameters["branchSizeThreshold"] ** 2)
 
-    newSubtreeRoots = []
+    skeletonPoints = np.concatenate([b.skeletonPoints for b in list(breadthFirstSearch(trunk))], axis=0)
+    skeletonLookUp = KDTree(skeletonPoints)
+
+    newSkeletons = []
     for cluster in clusters:
         clusterPoints = unassignedTlsPoints[cluster]
-        skeleton = generateSkeleton(clusterPoints, skeletonLookUp, treeSkeletonPoints, 
-                                    parameters["resolution"], 
+        skeleton = generateSkeleton(clusterPoints, skeletonLookUp, parameters["resolution"],
                                     np.deg2rad(parameters["minAngleThreshold"]),
                                     np.deg2rad(parameters["maxAngleThreshold"]),
                                     np.deg2rad(parameters["smoothAngleThreshold"]))
+        if skeleton is not None:
+            newSkeletons.append(skeleton)
 
-        if skeleton is None:
-            continue
+    connectSkeletons(trunk, newSkeletons, parameters["resolution"], parameters["maxDistanceThreshold"])
 
-        junctionIdx = iSkeletonLookUp.query(skeleton[0].skeletonPoints[0])
-        connectionBranch = connectSkeleton(skeleton,
-                                           junctionPoint=iTreeSkeletonPoints[junctionIdx],
-                                           junctionBranch=branches[iSkeletonBranchIndices[junctionIdx]],
-                                           junctionIdx=interpolationIndices[junctionIdx],
-                                           isInterpolation=interpolationIndices[junctionIdx] == interpolationIndices[junctionIdx - 1])
-        newSubtreeRoots.append(connectionBranch)
+    # could be improved by assigning clusters first
+    prunedTlsPoints = Branch.reassignPoints(list(breadthFirstSearch(trunk)), useTrimming=True)
 
-    prunedTlsPoints = []
-    branches = list(breadthFirstSearch(stem)) # TODO: make this an extra method?
-
-    for cluster, root in zip(clusters, newSubtreeRoots):
-        prunedTlsPoints.append(Branch.assignLocalPoints(unassignedTlsPoints[cluster],
-                                                        branches,
-                                                        closeBranches=list(breadthFirstSearch(root)),
-                                                        useTrimming=True))
-
-    prunedTlsPoints.append(Branch.reassignPoints(branches, useTrimming=True))
-
-    prunedTlsPoints = np.concatenate(prunedTlsPoints, axis=0)
     return prunedTlsPoints
 
 
 def getClusters(unassignedTlsPoints: npt.NDArray[np.double],
                 radius: np.double,
-                minSize: int,
-                prunePercentage = 0.01
+                minClusterSize: int,
+                keptPercentage: int = 0.99
                 ) -> List[npt.NDArray[np.intp]]:
     _, clusterLabels = dbscan(unassignedTlsPoints, eps=radius, min_samples=5)
-    clusterNum = clusterLabels.max() + 1
+    clusters = [indices for label, indices in getValueOccurrences(clusterLabels) if label >= 0]
 
-    clusters = []
-    for idx in range(clusterNum):
-        clusters.append(np.flatnonzero(clusterLabels == idx))
-
-    clusters.sort(key=lambda c: len(c))
-    totalSize = sum([len(c) for c in clusters])
+    clusterSizes = [len(c) for c in clusters]
+    maxRemovedCount = (1 - keptPercentage) * sum(clusterSizes)
 
     removedCount = 0
-    while True:
-        nextRemovedCount = removedCount
-        nextSize = len(clusters[nextRemovedCount])
-        while len(clusters[nextRemovedCount]) == nextSize and nextRemovedCount+1 < len(clusters):
-            nextRemovedCount += 1
-        nextSum = sum([len(c) for c in clusters[:idx+1]])
-        if nextSize >= minSize and nextSum / totalSize > prunePercentage:
+    sizes, counts = np.unique(clusterSizes, return_counts=True)
+    for size, count in zip(sizes, counts):
+        minClusterSize = max(minClusterSize, size)
+        removedCount += count * size
+        if removedCount > maxRemovedCount:
             break
-        else:
-            removedCount = nextRemovedCount
 
-    clusters = clusters[removedCount:]
-
-    return clusters
-
-
-def getInterpolatedSkeletonLookUp(stem: Branch, resolution: float):
-    branches = list(breadthFirstSearch(stem))
-    interpolations = [b.getInterpolation(resolution) for b in branches]
-    stemPoints, stemIndices = interpolations[0]
-
-    interpolationIndices = [stemIndices] + [indices[1:] for _, indices in interpolations[1:]]
-    interpolationIndices = np.concatenate(interpolationIndices, axis=0)
-
-    treeSkeletonPoints = [stemPoints] + [points[1:] for points, _ in interpolations[1:]]
-    skeletonBranchIndices = np.concatenate([np.full(len(points), idx) for idx, points in enumerate(treeSkeletonPoints)])
-    treeSkeletonPoints = np.concatenate(treeSkeletonPoints, axis=0)
-
-    skeletonLookUp = KDTree(treeSkeletonPoints)
-
-    return skeletonLookUp, treeSkeletonPoints, branches, skeletonBranchIndices, interpolationIndices
-
-
-def getSkeletonPointLookUp(stem: Branch):
-    branches = list(breadthFirstSearch(stem))
-    treeSkeletonPoints = [stem.skeletonPoints] + [b.skeletonPoints[1:] for b in branches[1:]]
-    treeSkeletonPoints = np.concatenate(treeSkeletonPoints, axis=0)
-
-    skeletonLookUp = KDTree(treeSkeletonPoints)
-
-    return skeletonLookUp, treeSkeletonPoints
+    return [c for c in clusters if len(c) >= minClusterSize]
 
 
 def generateSkeleton(tlsPoints: npt.NDArray[np.double], 
                      skeletonLookUp: KDTree,
-                     treeSkeletonPoints: npt.NDArray[np.double],
                      minLength: float,
                      minAngleThreshold: float,
                      maxAngleThreshold: float,
-                     smoothAngleThreshold: float) -> Optional[List[Branch]]:
+                     smoothAngleThreshold: float,
+                     testMode: bool = False) -> Optional[List[Branch]]:
     skeletonCandidate = None
     candidateTlsDistance = np.inf
 
     for skeletonSize in range(3, int(len(tlsPoints) ** 0.5) + 1):
-        skeletonPoints, _, _ = k_means(tlsPoints, skeletonSize)
+        if testMode:
+            # since randomness yields different results in python and matlab, the same randomly shuffled set of points is sampled instead.
+            initPoints = tlsPoints[[(i + skeletonSize) % len(tlsPoints) for i in range(skeletonSize)]]
+            skeletonPoints, _, _ = k_means(tlsPoints, skeletonSize, init=initPoints, tol=1e-5)
+        else:
+            skeletonPoints, _, _ = k_means(tlsPoints, skeletonSize, tol=1e-5)
         distances, indices = skeletonLookUp.query(skeletonPoints)
         closestIdx = distances.argmin()
 
         rootPoint = skeletonPoints[closestIdx]
-        nearestPoint = treeSkeletonPoints[indices[closestIdx]]
+        nearestPoint = skeletonLookUp.data[indices[closestIdx]]
 
         initialSearchDirection = normalizeVectors(rootPoint - nearestPoint)
-        treeDistances: npt.NDArray = np.vecdot(skeletonPoints - rootPoint, initialSearchDirection)
-        skeletonPoints = skeletonPoints[treeDistances.argsort()]
+        rootDistances = distanceAlongDirection(rootPoint, skeletonPoints, initialSearchDirection)
+        skeletonPoints = skeletonPoints[rootDistances.argsort()]
 
         skeletonGraph = buildSkeletonGraph(skeletonPoints, 0, initialSearchDirection, maxAngleThreshold)
         if skeletonGraph is None:
@@ -164,28 +114,49 @@ def generateSkeleton(tlsPoints: npt.NDArray[np.double],
     return skeletonCandidate
 
 
-def connectSkeleton(skeleton: List[Branch],
-                    junctionPoint: npt.NDArray[np.double],
-                    junctionBranch: Branch,
-                    junctionIdx: int,
-                    isInterpolation: bool = False
-                    ) -> Branch:
-    if isInterpolation:
-        junctionIdx += 1
-        junctionBranch.skeletonPoints = np.insert(junctionBranch.skeletonPoints, junctionIdx, junctionPoint, axis=0)
-        junctionBranch.updateSkeletonMeasurements()
+def connectSkeletons(trunk: Branch,
+                     skeletons: List[List[Branch]],
+                     resolution: float,
+                     maxDistanceThreshold: float):
+    connections = {s[0]: (None, 0, np.inf) for s in skeletons}
+    newStartBranch = trunk
 
-    junctionBranch, _ = junctionBranch.split(junctionIdx)
+    while skeletons:
+        branches = list(breadthFirstSearch(newStartBranch))[1:]
+        for branch in branches:
+            branch.interpolate(resolution, temporary=True)
+        skeletonPoints = np.concatenate([b.skeletonPoints for b in branches], axis=0)
+        indices = np.concatenate([np.arange(len(b), dtype=np.intp) for b in branches], axis=0)
+        branchIndices = np.repeat(np.arange(len(branches), dtype=np.intp), [len(b) for b in branches])
+        skeletonLookUp = KDTree(skeletonPoints)
 
-    rootPoint = skeleton[0].skeletonPoints[0]
-    connectionBranch = Branch(skeletonPoints=np.stack([junctionPoint, rootPoint]), parent=junctionBranch)
-    
-    for branch in skeleton:
-        branch.setParent(connectionBranch)
-    if len(skeleton) == 1:
-        connectionBranch.expand()
+        for skeleton in skeletons:
+            distance = connections[skeleton[0]][-1]
+            newDistance, idx = skeletonLookUp.query(skeleton[0][0])
+            if newDistance < distance:
+                connections[skeleton[0]] = (branches[branchIndices[idx]], indices[idx], newDistance)
 
-    return connectionBranch
+        skeleton = min(skeletons, key=lambda s: connections[s[0]][-1])
+        del skeletons[skeletons.index(skeleton)]
+
+        junctionBranch, junctionIdx, distance = connections[skeleton[0]]
+        if distance > maxDistanceThreshold:
+            break
+
+        junctionBranch, splitEnd = junctionBranch.split(junctionIdx)
+        for s in skeletons:
+            b, i, d = connections[s[0]]
+            if b is junctionBranch and i > junctionIdx:
+                connections[s[0]] = (splitEnd, i-junctionIdx, d)
+
+        newStartBranch = Branch(np.stack([junctionBranch[-1], skeleton[0][0]]), parent=junctionBranch)
+        for startBranch in skeleton:
+            startBranch.setParent(newStartBranch)
+
+    for branch in reversed(list(breadthFirstSearch(trunk))):
+        branch.removeTemporaryPoints()
+        if len(branch.children) == 1:
+            branch.expand()
 
 
 def buildSkeletonGraph(skeletonPoints: npt.NDArray[np.double],
@@ -208,8 +179,7 @@ def buildSkeletonGraph(skeletonPoints: npt.NDArray[np.double],
         pointIdx, searchDirection = searchHooks.popleft()
 
         for neighborIdx in neighbors[pointIdx]:
-            if (neighborIdx == pointIdx or 
-                    neighborIdx == rootIdx or # root has no incoming edges
+            if (neighborIdx == pointIdx or neighborIdx == rootIdx or # root has no incoming edges
                     skeletonGraph.has_edge(pointIdx, neighborIdx)):
                 continue
 
@@ -221,24 +191,23 @@ def buildSkeletonGraph(skeletonPoints: npt.NDArray[np.double],
                 skeletonGraph.add_edge(pointIdx, neighborIdx, distance=distance)
                 searchHooks.append((neighborIdx, neighborDirection))
 
-    if nx.is_weakly_connected(skeletonGraph):
+    if not nx.is_weakly_connected(skeletonGraph):
         return None
 
     skeletonGraph: nx.DiGraph = nx.minimum_spanning_arborescence(skeletonGraph, attr="distance")
-
     return skeletonGraph
 
 
-def skeletonIsValid(firstBranches: List[Branch],
+def skeletonIsValid(startBranches: List[Branch],
                     minLength: float,
                     minAngleThreshold: float,
                     smoothAngleThreshold: float) -> bool:
-    branches = chain.from_iterable([breadthFirstSearch(b) for b in firstBranches])
-    if sum([b.length for b in branches]) < minLength:
+    branches = list(chain.from_iterable([breadthFirstSearch(b) for b in startBranches]))
+    if any([b.length < minLength for b in branches]):
         return False
 
-    for [b, s] in chain.from_iterable([combinations(firstBranches, 2), 
-                                       chain.from_iterable([combinations(b.children, 2) for b in branches])]):
+    for [b, s] in chain(combinations(startBranches, 2),
+                        chain.from_iterable([combinations(b.children, 2) for b in branches])):
         branchDirection = normalizeVectors(b.skeletonPoints[-1] - b.skeletonPoints[0])
         siblingDirection = normalizeVectors(s.skeletonPoints[-1] - s.skeletonPoints[0])
         if angle(branchDirection, siblingDirection) < minAngleThreshold:

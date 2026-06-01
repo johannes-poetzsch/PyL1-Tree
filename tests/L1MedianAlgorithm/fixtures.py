@@ -3,7 +3,7 @@ import os
 import pytest
 from scipy.io import loadmat
 
-from tests.utils.data_import import import_branches, rootPath
+from tests.test_utils.data_import import import_branches, rootPath
 
 
 @pytest.fixture(params=["first Range", "second Range", "final Range"])

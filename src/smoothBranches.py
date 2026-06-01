@@ -2,78 +2,84 @@ import numpy as np
 import numpy.typing as npt
 from scipy.spatial import KDTree
 
-from typing import Dict
+from typing import Any, Dict
 
-from src.filterBranches import limitToRange
+from src.adjustBifurcations import adjustBifurcations
+from src.filterBranches import filterByLength, limitToRange
 from src.objects.branch import Branch
 from src.utils.branchUtils import generateSearchRanges
-from src.utils.geometry import getStripAngles, normalizeVectors, stripPointsDistances
+from src.utils.geometry import distanceAlongDirection, getStripAngles, normalizeVectors, stripPointsDistances
 from src.utils.iteration import breadthFirstSearch
 from src.utils.pointMetrics import calculateDensity
 
 
-def smoothBranches(stem: Branch,
+def smoothBranches(trunk: Branch,
                    tlsPoints: npt.NDArray[np.double],
                    unassignedTlsPoints: npt.NDArray[np.double],
                    parameters: Dict[str, any]) -> npt.NDArray[np.double]:
-    branches = list(breadthFirstSearch(stem))
+    cleanUpBranches(trunk, unassignedTlsPoints, includeNewPointsForRanges=False)
 
-    removeBranchAnomalies(stem)
-    unassignedTlsPoints = Branch.reassignPoints(list(breadthFirstSearch(stem)), unassignedTlsPoints)
-    searchRanges = generateSearchRanges(list(breadthFirstSearch(stem)), useMedianForStem=False, useTrimming=True)
-    unassignedTlsPoints = np.append(unassignedTlsPoints, limitToRange(branches, searchRanges), axis=0)
-
-    tlsKDTree = KDTree(tlsPoints)
-    for branch in branches:
-        densities = calculateDensity(branch.tlsPoints, tlsKDTree, parameters["initialSearchRange"]) # TODO check this
-        smoothBranch(branch, densities, parameters["resolution"], np.deg2rad(parameters["smoothAngleThreshold"]))
+    tlsLookUp = KDTree(tlsPoints)
+    for branch in list(breadthFirstSearch(trunk)):
+        smoothBranch(branch, tlsLookUp, 2 * parameters["initialSearchRange"], parameters["resolution"],
+                     np.deg2rad(parameters["smoothAngleThreshold"]))
 
     return unassignedTlsPoints
 
 
-def removeBranchAnomalies(stem):
+def cleanUpBranches(trunk: Branch,
+                    unassignedPoints: npt.NDArray[np.double],
+                    includeNewPointsForRanges: bool = True
+                    ) -> npt.NDArray[np.double]:
+    removeBranchAnomalies(trunk)
+
+    branches = list(breadthFirstSearch(trunk))
+
+    if includeNewPointsForRanges:
+        unassignedTlsPoints = Branch.reassignPoints(branches, unassignedPoints)
+
+    searchRanges = generateSearchRanges(branches, useMedianForStem=False, useTrimming=True)
+
+    if not includeNewPointsForRanges:
+        unassignedTlsPoints = Branch.reassignPoints(branches, unassignedPoints)
+
+    unassignedTlsPoints = np.append(unassignedTlsPoints, limitToRange(branches, searchRanges), axis=0)
+
+    return unassignedTlsPoints
+
+
+def removeBranchAnomalies(trunk):
     rightAngle = np.deg2rad(90)
-    for branch in breadthFirstSearch(stem):
+    for branch in breadthFirstSearch(trunk):
         wasChanged = False
         while True:
-            angles = branch.getAngles()
-            if angles is None or len(angles) <= 1:
+            if len(branch) < 3:
                 break
 
-            if branch.isLeaf():
-                maxIdx = angles.argmax()
-            else:
-                maxIdx = angles[:-1].argmax() # Avoid removing the terminal point of an inner node if possible
+            angles = branch.getAngles()
+            maxIdx = angles.argmax()
 
-            maxAngle = angles[maxIdx]
-            if maxAngle >= rightAngle:
-                deletionIdx = maxIdx + 2
-                # TODO: this may be slow -> use mask instead?
-                branch.skeletonPoints = np.delete(branch.skeletonPoints, deletionIdx, axis=0)
+            if angles[maxIdx] >= rightAngle:
+                branch.skeletonPoints = np.delete(branch.skeletonPoints, maxIdx + 1, axis=0)
                 branch.endPointIndices = None
                 wasChanged = True
             else:
                 break
-        if angles is not None and angles[-1] > rightAngle and not branch.isLeaf():
-            raise ValueError("Did not expect a terminal point to be anomalous.")
         if wasChanged:
             branch.updateSkeletonMeasurements()
 
 
 def smoothBranch(branch: Branch, 
-                 densities: npt.NDArray[np.double], 
+                 tlsLookUp: KDTree,
+                 searchRange: float,
                  resolution: float,
                  smoothAngleThreshold: float):
-    _, trimmed = branch.getDistances(branch.tlsPoints, 
-                                     trimStart=True, 
-                                     trimEnd=True,
-                                     returnTrimming=True)
-
+    _, trimmed = branch.getDistances(branch.tlsPoints, trimStart=True, trimEnd=True, returnTrimming=True)
     tlsPoints = branch.tlsPoints[~trimmed]
     if len(tlsPoints) < 10:
         return
 
-    densities = densities[~trimmed]
+    densities = calculateDensity(tlsPoints, tlsLookUp, searchRange)
     weightedPoints = tlsPoints * densities[:, np.newaxis]
 
     startPoint: npt.NDArray[np.double] = branch.skeletonPoints[0]
@@ -81,28 +87,29 @@ def smoothBranch(branch: Branch,
 
     direction = normalizeVectors(endPoint - startPoint)
 
-    distanceToStart: npt.NDArray[np.double] = np.vecdot(tlsPoints - startPoint, direction)
+    distanceToStart = distanceAlongDirection(startPoint, tlsPoints, direction)
     order = distanceToStart.argsort()
-    
-    maxSampleNum = int(min(np.floor(branch.length / resolution), len(tlsPoints) / 2))
+
+    branchLength = np.linalg.norm(branch[-1] - branch[0])
+    maxSampleNum = int(min(np.floor(branchLength / resolution), len(tlsPoints) / 2))
     newSkeleton = None
     newRadius = np.inf
 
     for sampleNum in range(maxSampleNum + 1):
         if sampleNum == 0:
             tempSkeleton = np.stack([startPoint, endPoint], axis=0)
-        else:
+        else: # TODO: can work on GPU if padded with np.insert + reshape instead of split (or as_strided instead of reshape)
             sections = np.array_split(order, sampleNum + 1)
-            sectionWeighted = [weightedPoints[section].sum(axis=0) for section in sections]
+            sectionsWeighted = [weightedPoints[section].sum(axis=0) for section in sections]
             sectionTotal = [densities[section].sum() for section in sections]
-            samples = [(sectionWeighted[i] + sectionWeighted[i+1]) / (sectionTotal[i] + sectionTotal[i+1]) for i in range(sampleNum)]
+            samples = [(sectionsWeighted[i] + sectionsWeighted[i+1]) / (sectionTotal[i] + sectionTotal[i+1])
+                       for i in range(sampleNum)]
             tempSkeleton = np.stack([startPoint] + samples + [endPoint], axis=0)
 
         if len(tempSkeleton) < 3:
             isCredible = True
         else:
-            angles = getStripAngles(tempSkeleton)
-            isCredible = angles.max() < smoothAngleThreshold
+            isCredible = np.all(getStripAngles(tempSkeleton) < smoothAngleThreshold)
 
         if not isCredible:
             continue

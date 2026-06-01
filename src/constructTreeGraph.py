@@ -26,39 +26,43 @@ def constructTreeGraph(tlsPoints: npt.NDArray[np.double],
     branches = splitCrookedBranches(branches)
 
     componentStems = constructComponents(branches, parameters["minDistanceThreshold"], heightAttribute)
-    stem = min(componentStems, key=lambda componentStem: componentStem.skeletonPoints[0, heightAttribute])
+    trunk = min(componentStems, key=lambda componentStem: componentStem.skeletonPoints[0, heightAttribute])
 
     branches = list(chain.from_iterable([breadthFirstSearch(stem) for stem in componentStems]))
     trimmedPoints = Branch.assignAllPoints(tlsPoints, branches, useTrimming=True)
 
     prunedBranches, trimmedPoints = connectComponents(
-        stem, componentStems, unfixedPoints, trimmedPoints,
+        trunk, componentStems, unfixedPoints, trimmedPoints,
         parameters["minDistanceThreshold"], parameters["maxDistanceThreshold"],
         np.deg2rad(parameters["minAngleThreshold"]), np.deg2rad(parameters["maxAngleThreshold"]),
         parameters["resolution"], parameters["windowSize"], parameters["densityFactor"])
 
-    trimmedPoints = addBasePoint(stem, parameters["basePoint"], trimmedPoints)
-    prunedPoints1 = filterTreeBranches(stem, parameters, pruneNewLeaves=True)
-    branches = list(breadthFirstSearch(stem))
-    prunedPoints2 = limitToRange(branches, parameters["baseRadius"], doubleBaseRange=True, baseLevelNumber=3)
-    prunedPoints3 = pruneThickeningLeaves(branches, parameters["branchSizeThreshold"])
+    trimmedPoints = addBasePoint(trunk, parameters["basePoint"], trimmedPoints)
+    prunedPoints1 = filterTreeBranches(trunk, parameters, pruneNewLeaves=True)
+    branches = list(breadthFirstSearch(trunk))
 
-    prunedPoints = [prunedPoints1, prunedPoints2, prunedPoints3, trimmedPoints] + [b.tlsPoints for b in prunedBranches]
+    prunedPoints2 = removeTlsPointsNearPoints(branches, unfixedPoints, parameters["resolution"])
+
+    prunedPoints3 = limitToRange(branches, parameters["baseRadius"], doubleBaseRange=True, baseLevelNumber=3)
+    prunedPoints4 = pruneThickeningLeaves(branches, parameters["branchSizeThreshold"])
+
+    prunedPoints = ([prunedPoints1, prunedPoints2, prunedPoints3, prunedPoints4, trimmedPoints]
+                    + [b.tlsPoints for b in prunedBranches])
     prunedPoints = np.concatenate(prunedPoints, axis=0)
 
-    return stem, prunedPoints
+    return trunk, prunedPoints
 
 
-def addBasePoint(stem: Branch, basePoint: npt.NDArray[np.double], unassignedTlsPoints: npt.NDArray[np.double]):
-    rootPoint = stem.skeletonPoints[0]
-    stemDirection = normalizeVectors(stem.skeletonPoints[-1] - rootPoint)
+def addBasePoint(trunk: Branch, basePoint: npt.NDArray[np.double], unassignedTlsPoints: npt.NDArray[np.double]):
+    rootPoint = trunk.skeletonPoints[0]
+    stemDirection = normalizeVectors(trunk.skeletonPoints[-1] - rootPoint)
     baseDirection = normalizeVectors(rootPoint - basePoint)
     baseAngle = angle(stemDirection, baseDirection)
 
     if np.rad2deg(baseAngle) < 90:
-        stem.skeletonPoints = np.insert(stem.skeletonPoints, 0, basePoint, axis=0)
-        stem.updateSkeletonMeasurements()
-        unassignedTlsPoints = Branch.assignLocalPoints(unassignedTlsPoints, [stem], useTrimming=True)
+        trunk.skeletonPoints = np.insert(trunk.skeletonPoints, 0, basePoint, axis=0)
+        trunk.updateSkeletonMeasurements()
+        unassignedTlsPoints = Branch.assignLocalPoints(unassignedTlsPoints, [trunk], useTrimming=True)
 
     return unassignedTlsPoints
 
@@ -130,10 +134,10 @@ def preFilterBranches(branches: List[Branch],
     branches.sort(key=lambda b: b.length, reverse=True)
 
     branchTlsDistances = [b.getDistances(b.tlsPoints) for b in branches]
-
-    searchRanges = np.array([np.quantile(d, 0.9, method="hazen") if len(d) > 0 else 0.0
-                             for d in branchTlsDistances])
-    filterByInfluence(branches, searchRanges=np.minimum(searchRanges, baseRadius), useMean=True)
+    searchRanges = [np.minimum(baseRadius, np.quantile(d, 0.9, method="hazen")) if len(d) > 0 else 0.0
+                    for d in branchTlsDistances]
+    searchRanges = {b: np.minimum(baseRadius, r) for b, r in zip(branches, searchRanges)}
+    filterByInfluence(branches, searchRanges, useMean=True)
 
     removedBranches.extend([b for b in branches if b.isRemoved])
     branches = [b for b in branches if not b.isRemoved]
@@ -142,6 +146,36 @@ def preFilterBranches(branches: List[Branch],
         if removedBranches else np.empty((0,3), dtype=np.double)
 
     return branches, prunedPoints
+
+
+def removeTlsPointsNearPoints(branches: List[Branch],
+                              points: npt.NDArray[np.double],
+                              resolution: float
+                              ) -> npt.NDArray[np.double]:
+    unassignedPoints = [np.empty((0,3), dtype=np.double)]
+    branchIndices, distancesToBranches = Branch.findGlobalClosestBranches(points, branches)
+    points = points[distancesToBranches > resolution]
+    distancesToBranches = distancesToBranches[distancesToBranches > resolution]
+
+    isOutside = [b.getDistances(point[np.newaxis], trimStart=b.isStem(), trimEnd=b.isLeaf(), returnTrimming=True)[1].squeeze()
+                 for point, b in zip(points, [branches[idx] for idx in branchIndices])]
+    isOutside = np.array(isOutside, dtype=np.bool)
+
+    for branch in branches:
+        if len(branch.tlsPoints) == 0:
+            continue
+        tlsPoints = branch.tlsPoints
+        distances = branch.getDistances(tlsPoints)
+        radius = np.quantile(distances, 0.9, method="hazen")
+        relevantPoints = points[isOutside | (distancesToBranches > radius)]
+
+        distancesToPoints, _ = KDTree(relevantPoints).query(tlsPoints)
+
+        unassignedPoints.append(tlsPoints[distances >= distancesToPoints])
+        branch.tlsPoints = tlsPoints[distances < distancesToPoints]
+
+    unassignedPoints = np.concatenate(unassignedPoints, axis=0)
+    return unassignedPoints
 
 
 def splitCrookedBranches(branches: List[Branch]):

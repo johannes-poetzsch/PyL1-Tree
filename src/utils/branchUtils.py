@@ -2,7 +2,7 @@ import cupy as cp
 import networkx as nx
 import numpy as np
 import numpy.typing as npt
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from src.objects.branch import Branch
 
@@ -46,21 +46,19 @@ def buildSubtreeFromGraph(skeletonGraph: nx.DiGraph,
 
 def generateSearchRanges(branches: List[Branch], # have to be semi-ordered by distance from stem
                          useMedianForStem = False,
-                         useTrimming = True) -> List[float]:
-    searchRanges = []
-    searchRangeLookUp = {}
+                         useTrimming = True) -> Dict[Branch, float]:
+    searchRanges = {}
     for branch in branches:
         if branch.isRemoved:
-            searchRanges.append(0)
+            searchRanges[branch] = 0.0
             continue
 
         xp = cp.get_array_module(branch.tlsPoints)
         distances = branch.getDistances(branch.tlsPoints,
                                         trimStart=useTrimming and branch.isStem(),
-                                        trimEnd=useTrimming and branch.isLeaf(),
-                                        returnTrimming=False)
+                                        trimEnd=useTrimming and branch.isLeaf())
 
-        if useMedianForStem and branch.isStem:
+        if useMedianForStem and branch.isStem():
             searchRange = 2 * xp.median(distances)
         else:
             searchRange = 2 * xp.quantile(distances, 0.9, method="hazen")
@@ -69,9 +67,8 @@ def generateSearchRanges(branches: List[Branch], # have to be semi-ordered by di
             validParent = branch.parent
             while validParent.length <= 0.2 and not validParent.isStem(): # TODO: check magic number
                 validParent = validParent.parent
-            searchRange = xp.minimum(searchRange, searchRangeLookUp[validParent])
+            searchRange = xp.minimum(searchRange, searchRanges[validParent])
 
-        searchRanges.append(searchRange)
-        searchRangeLookUp[branch] = searchRange
+        searchRanges[branch] = searchRange
 
     return searchRanges

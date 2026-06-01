@@ -5,7 +5,8 @@ from scipy.io import loadmat
 from typing import Any, Dict
 import yaml
 
-from tests.utils.data_import import rootPath
+from src.utils.geometry import pointSort
+from tests.test_utils.data_import import rootPath
 
 
 @pytest.fixture(scope='module')
@@ -41,7 +42,6 @@ def tls_points(base_point) -> np.ndarray:
         with open(os.path.join(rootPath(), data_path)) as input_file:
             points = np.loadtxt(input_file, dtype=np.double)
         points = np.unique(points, axis=0)
-        points = np.sort(points.view([('x', np.double), ('y', np.double), ('z', np.double)]).squeeze(-1),
-                         order=['z','x','y']).view((np.double, 3))
+        points = pointSort(points, ('z','x','y'))
         tls_points.pos = np.append(points, base_point[np.newaxis], axis=0)
     return tls_points.pos.copy()

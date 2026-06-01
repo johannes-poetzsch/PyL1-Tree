@@ -6,7 +6,7 @@ from tests.global_fixtures import parameters
 from tests.L1MedianAlgorithm.fixtures import (branches, current_range, fixed_after, fixed_after_finding_branches,
                                               ignored_after, is_branch, is_branch_after, positions_after,
                                               seed_rel_path_positions, smooth_sigma_after)
-from tests.utils.comparison import branches_are_equal
+from tests.test_utils.comparison import branches_are_equal
 
 
 def test_find_new_branches(branches, parameters, seed_rel_path_positions,

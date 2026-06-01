@@ -1,37 +1,33 @@
 import numpy as np
 from typing import Dict, Tuple
 
-from src.filterBranches import limitToRange
 from src.objects.branch import Branch
-from src.smoothBranches import removeBranchAnomalies
-from src.utils.branchUtils import generateSearchRanges
-#from src.utils.geometry import angle, normalizeVectors
+from src.utils.geometry import angle, normalizeVectors
 from src.utils.iteration import breadthFirstSearch
 
 
-def constructTreeModel(stem: Branch) -> Tuple[Dict[Branch, float], Dict[Branch, bool]]:
-    branches = list(breadthFirstSearch(stem))
+def constructTreeModel(trunk: Branch) -> Tuple[Dict[Branch, float], Dict[Branch, float], Dict[Branch, bool]]:
+    branchRadiiCentrifugal, radiusIsCredible = calculateBranchRadiiCentrifugal(trunk)
+    continuations = getContinuations(trunk, branchRadiiCentrifugal)
+    branchRadiiGaaliche = {}
+    for branch in breadthFirstSearch(trunk):
+        if branch.isStem() or branch is not continuations[branch.parent]:
+            branchRadiiGaaliche[branch] = branchRadiiCentrifugal[branch]
+        else:
+            branchRadiiGaaliche[branch] = branchRadiiCentrifugal[branch.parent]
+    return branchRadiiCentrifugal, branchRadiiGaaliche, radiusIsCredible
 
-    removeBranchAnomalies(stem)
-    Branch.reassignPoints(list(breadthFirstSearch(stem)))
 
-    searchRanges = generateSearchRanges(list(breadthFirstSearch(stem)), useMedianForStem=False, useTrimming=True)
-    limitToRange(branches, searchRanges)
-    branchRadii, radiusIsCredible = calculateBranchRadiiCentrifugal(stem)
-    return branchRadii, radiusIsCredible
-
-
-def calculateBranchRadiiCentrifugal(stem: Branch) -> Tuple[Dict[Branch, float], Dict[Branch, bool]]:
+def calculateBranchRadiiCentrifugal(trunk: Branch) -> Tuple[Dict[Branch, float], Dict[Branch, bool]]:
     branchRadii: Dict[Branch, float] = {}
     radiusIsCredible: Dict[Branch, bool] = {}
 
-    for branch in breadthFirstSearch(stem):
+    for branch in breadthFirstSearch(trunk):
         if len(branch.tlsPoints) == 0:
             branchRadii[branch] = np.nan
             continue
 
         distances, trimmed = branch.getDistances(branch.tlsPoints, trimStart=True, trimEnd=True, returnTrimming=True)
-
         distances = distances[~trimmed]
         tlsPoints = branch.tlsPoints[~trimmed]
 
@@ -43,11 +39,11 @@ def calculateBranchRadiiCentrifugal(stem: Branch) -> Tuple[Dict[Branch, float], 
         parentRadius = branchRadii[branch.parent]
 
         _, neighborDistances = Branch.findClosestBranches(tlsPoints, neighborBranches, useTrimming=False)
-        distances = distances[neighborDistances < 2 * parentRadius]
+        distances = distances[2 * parentRadius <= neighborDistances]
 
         branchRadii[branch] = distances.mean() if len(distances) > 0 else np.nan
 
-    for branch in breadthFirstSearch(stem):
+    for branch in breadthFirstSearch(trunk):
         if branch.isStem():
             radiusIsCredible[branch] = True
             continue
@@ -73,39 +69,33 @@ def calculateBranchRadiiCentrifugal(stem: Branch) -> Tuple[Dict[Branch, float], 
     return branchRadii, radiusIsCredible
 
 
-#def calculateBranchRadiiGaaliche(stem: Branch, initialRadii: Dict[Branch, float]) -> Dict[Branch, float]:
-#    branchRadii = {}
-#    continuations = {}
-#
-#    for branch in breadthFirstSearch(stem):
-#        if not branch.isLeaf():
-#            continuations[branch] = getContinuation(branch, initialRadii)
+def getContinuations(trunk: Branch, branchRadii: Dict[Branch, float]) -> Dict[Branch, Branch]:
+    continuations: Dict[Branch, Branch] = {}
 
+    for branch in breadthFirstSearch(trunk):
+        if branch.isLeaf():
+            continuations[branch] = branch
+            continue
+        branchDirection = normalizeVectors(branch.skeletonPoints[-1] - branch.skeletonPoints[0])
 
+        children = list(branch.children)
+        childAngles = {}
+        for child in branch.children:
+            childDirection = normalizeVectors(child.skeletonPoints[-1] - child.skeletonPoints[0])
+            childAngles[child] = np.rad2deg(angle(childDirection, branchDirection))
 
+        continuationBranch = None
+        if any([np.isnan(branchRadii[c]) for c in children]):
+            minAngle = min(childAngles.values())
 
+            children.sort(key=lambda c: branchRadii[c], reverse=True)  # descending radius
+            for child in children:
+                if childAngles[child] / minAngle <= 1.1:
+                    continuationBranch = child
+                    break
+        else:
+            continuationBranch = min(children, key=lambda c: childAngles[c])
 
+        continuations[branch] = continuationBranch
 
-#def getContinuation(branch: Branch, branchRadii: Dict[Branch, float]) -> Branch:
-#    continuationBranch = None
-#    branchDirection = normalizeVectors(branch.skeletonPoints[-1] - branch.skeletonPoints[0])
-#
-#    childData = []
-#    for child in branch.children:
-#        siblingDirection = normalizeVectors(child.skeletonPoints[-1] - child.skeletonPoints[0])
-#        siblingAngle = angle(siblingDirection, branchDirection)
-#        childData.append({"branch": child,
-#                          "radius": branchRadii[child],
-#                          "angle": siblingAngle})
-#
-#    if any([np.isnan(branchRadii[c]) for c in branch.children]):
-#        childData.sort(key=lambda cd: cd["radius"], reverse=True)  # descending radius
-#        minAngle = min(cd["angle"] for cd in childData)
-#        for cd in childData:
-#            if cd["angle"] / minAngle <= 1.1:
-#                continuationBranch = cd["branch"]
-#                break
-#    else:
-#        continuationBranch = min(childData, key=lambda x: x["angle"])["branch"]
-#
-#    return continuationBranch
+    return continuations

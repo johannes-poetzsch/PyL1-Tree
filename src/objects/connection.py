@@ -234,7 +234,7 @@ class Connection(BoundedObject):
                         distances: npt.NDArray[np.double],
                         maxDistance: Optional[float]
                         ) -> Tuple[npt.NDArray[np.intp], npt.NDArray[np.double], npt.NDArray[np.double], npt.NDArray[np.intp]]:
-        newDistances, pedalPoints, segmentIds, _ = stripPointsDistances(strip, points, returnPedalInfo=True)
+        newDistances, pedalPoints, segmentIds = stripPointsDistances(strip, points, returnPedalInfo=True)
 
         isAtConnection = newDistances < distances
         if maxDistance is not None:

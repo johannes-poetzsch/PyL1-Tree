@@ -19,7 +19,7 @@ class TlsPointManager:
         self.assignedPointsMaxDistance = self.assignedPointsDistances.max()
 
         self.unassignedPoints = unassignedPoints
-        self.unassignedPointsDistances = Branch.findMinBranchDistances(self.unassignedPoints, list(branches))
+        _, self.unassignedPointsDistances = Branch.findGlobalClosestBranches(self.unassignedPoints, list(branches))
         self.unassignedPointsLookUp = KDTree(self.unassignedPoints)
         self.unassignedPointsMaxDistance = self.unassignedPointsDistances.max()
 

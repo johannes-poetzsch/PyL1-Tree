@@ -12,8 +12,8 @@ from src.objects.unconnectedComponent import UnconnectedComponent
 from src.objects.tlsPointManager import TlsPointManager
 from src.utils.iteration import breadthFirstSearch
 from tests.global_fixtures import base_point, base_radius, parameters, tls_points
-from tests.utils.comparison import branches_are_equal, subtrees_are_equal
-from tests.utils.data_import import connect_branches, import_branches, rootPath
+from tests.test_utils.comparison import branches_are_equal, subtrees_are_equal
+from tests.test_utils.data_import import connect_branches, import_branches, rootPath
 
 
 @pytest.fixture
@@ -30,7 +30,7 @@ def components_stems(branches):
     component_stems = []
     for component_id in np.unique(component_ids):
         component_branches = [b for b, cid in zip(branches, component_ids) if cid == component_id]
-        component_stems.append(connect_branches(component_branches))
+        component_stems.append(connect_branches(component_branches)[0])
 
     component_stems.sort(key=lambda c: min([b.skeletonPoints[:,2].min() for b in breadthFirstSearch(c)]))
     return component_stems
@@ -110,7 +110,7 @@ def skeleton_points_after_connection():
 @pytest.fixture
 def tree_graph_after_connection(skeleton_points_after_connection):
     tree_branches = import_branches("TestData/constructTreeGraph/connectionResult", skeleton_points_after_connection)
-    trunk = connect_branches(tree_branches)
+    trunk = connect_branches(tree_branches)[0]
     return trunk
 
 
@@ -121,7 +121,7 @@ def assigned_points(is_trimmed, tls_points):
 
 @pytest.fixture
 def assigned_distances(assigned_points, branches):
-    distances = Branch.findMinBranchDistances(assigned_points, branches)
+    _, distances = Branch.findGlobalClosestBranches(assigned_points, branches)
     return distances
 
 
@@ -132,7 +132,7 @@ def unassigned_points(is_trimmed, tls_points):
 
 @pytest.fixture
 def unassigned_distances(unassigned_points, branches):
-    distances = Branch.findMinBranchDistances(unassigned_points, branches)
+    _, distances = Branch.findGlobalClosestBranches(unassigned_points, branches)
     return distances
 
 
@@ -151,7 +151,7 @@ def test_generate_potential_connections(potential_connection_edges, branches, un
     # sort edge points so that the edge orientation does not matter
     edges, expected_edges = [np.sort(e, axis=0) for e in edges], [np.sort(e, axis=0) for e in potential_connection_edges]
 
-    edges, expected_edges = np.stack(edges).sort(axis=0), np.stack(expected_edges).sort(axis=0)
+    edges, expected_edges = np.sort(np.stack(edges), axis=0), np.sort(np.stack(expected_edges), axis=0)
 
     # expected edges might appear multiple times in edges
     # since points can appear in multiple branches and a new (duplicate) edge is created for each branch

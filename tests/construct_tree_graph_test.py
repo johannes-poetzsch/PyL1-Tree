@@ -3,12 +3,13 @@ import numpy as np
 import os
 import pytest
 
-from src.constructTreeGraph import constructComponents, createSkeletonGraph, preFilterBranches, splitCrookedBranches
+from src.constructTreeGraph import addBasePoint, constructComponents, createSkeletonGraph, preFilterBranches, \
+    removeTlsPointsNearPoints, splitCrookedBranches
 from src.objects.branch import Branch
 from tests.connect_components_test import unassigned_points
 from tests.global_fixtures import base_point, base_radius, parameters, tls_points
-from tests.utils.comparison import branches_are_equal, subtrees_are_equal
-from tests.utils.data_import import import_branches, rootPath
+from tests.test_utils.comparison import branches_are_equal, subtrees_are_equal
+from tests.test_utils.data_import import import_branches, rootPath
 
 
 @pytest.fixture
@@ -146,3 +147,113 @@ def test_construct_components(filtered_branches, parameters, components):
     component_stems = constructComponents(filtered_branches, parameters["minDistanceThreshold"])
     for component, expected_component in zip(component_stems, components):
         assert subtrees_are_equal(component, expected_component)
+
+
+class TestAddBasePoint:
+    @pytest.fixture
+    def skeleton_points(self):
+        return np.array([[0, 0, 0], [0, 1, 1], [0, 1, 2]], dtype=np.double)
+
+    @pytest.fixture
+    def trunk(self, skeleton_points):
+        return Branch(skeleton_points)
+
+
+    def test_successful(self, skeleton_points, trunk):
+        base_point = np.array([0,-0.5,.1], dtype=np.double)
+        unassigned_points = np.empty((0,3), dtype=np.double)
+
+        expected_branch_points = np.append([base_point], skeleton_points, axis=0)
+
+        addBasePoint(trunk, base_point, unassigned_points)
+
+        np.testing.assert_array_equal(trunk.skeletonPoints, expected_branch_points)
+
+
+    def test_unsuccessful(self, skeleton_points, trunk):
+        base_point = np.array([0, 0.5, .1], dtype=np.double)
+        unassigned_points = np.empty((0, 3), dtype=np.double)
+
+        addBasePoint(trunk, base_point, unassigned_points)
+
+        np.testing.assert_array_equal(trunk.skeletonPoints, skeleton_points)
+
+
+    def test_assigns_points(self, skeleton_points, trunk):
+        base_point = np.array([0,0,-1], dtype=np.double)
+        unassigned_points = np.array([[1,1,-1],
+                                      [0,1,-0.5],
+                                      [0,0,-1.1]], dtype=np.double)
+        expected_tls_points = unassigned_points[[0,1]]
+
+        addBasePoint(trunk, base_point, unassigned_points)
+
+        np.testing.assert_array_equal(trunk.tlsPoints, expected_tls_points)
+
+
+class TestRemoveTlsPointsNearPoints:
+    @pytest.fixture
+    def branches(self):
+        b1 = Branch(skeletonPoints=np.array([[0,0,0], [0,0,1], [0,0,2]], dtype=np.double),
+                    tlsPoints=np.array([[0.3,0,0.5], [0.8,0,1.4], [0.3,0.2,1.8]], dtype=np.double))
+        b2 = Branch(skeletonPoints=np.array([[0,0,2], [0,0,3], [0,0,4]], dtype=np.double),
+                    tlsPoints=np.array([[0.6,0,2.5], [0,0.6,3.5], [0.3,0.3,3.9]], dtype=np.double),
+                    parent=b1)
+        return [b1, b2]
+
+
+    @pytest.fixture
+    def resolution(self):
+        return 0.2
+
+
+    def test_removes_points(self, branches, resolution):
+        points = np.array([[1.0,0,1.4], [0.3,0.3,4.1]], dtype=np.double)
+
+        expectedTlsPoints1 = branches[0].tlsPoints[[0,2]]
+        expectedTlsPoints2 = branches[1].tlsPoints[[0,1]]
+        expectedRemovedPoints = np.stack((branches[0].tlsPoints[1], branches[1].tlsPoints[2]))
+
+        removed_points = removeTlsPointsNearPoints(branches, points, resolution)
+
+        np.testing.assert_array_equal(expectedTlsPoints1, branches[0].tlsPoints)
+        np.testing.assert_array_equal(expectedTlsPoints2, branches[1].tlsPoints)
+        np.testing.assert_array_equal(expectedRemovedPoints, removed_points)
+
+
+    def test_does_not_remove_near_close_points(self, branches, resolution):
+        points = np.array([[0,0.1,1.4], [0.1,0.1,4.1]], dtype=np.double)
+        originalTlsPoints1 = branches[0].tlsPoints
+        originalTlsPoints2 = branches[1].tlsPoints
+
+        removed_points = removeTlsPointsNearPoints(branches, points, resolution)
+        assert len(removed_points) == 0
+        np.testing.assert_array_equal(originalTlsPoints1, branches[0].tlsPoints)
+        np.testing.assert_array_equal(originalTlsPoints2, branches[1].tlsPoints)
+
+
+    def test_removes_near_outliers(self, branches, resolution):
+        points = np.array([[0.3, 0.3, 4.1]], dtype=np.double)
+
+        expectedTlsPoints1 = branches[0].tlsPoints
+        expectedTlsPoints2 = branches[1].tlsPoints[[0, 1]]
+        expectedRemovedPoint = [branches[1].tlsPoints[2]]
+
+        removed_points = removeTlsPointsNearPoints(branches, points, resolution)
+
+        np.testing.assert_array_equal(expectedTlsPoints1, branches[0].tlsPoints)
+        np.testing.assert_array_equal(expectedTlsPoints2, branches[1].tlsPoints)
+        np.testing.assert_array_equal(expectedRemovedPoint, removed_points)
+
+
+    def test_does_not_remove_near_points_in_radius(self, branches, resolution):
+        points = np.array([[0.4,0,0.5], [0.3, 0.3, 3.9]], dtype=np.double)
+
+        originalTlsPoints1 = branches[0].tlsPoints
+        originalTlsPoints2 = branches[1].tlsPoints
+
+        removed_points = removeTlsPointsNearPoints(branches, points, resolution)
+
+        assert len(removed_points) == 0
+        np.testing.assert_array_equal(originalTlsPoints1, branches[0].tlsPoints)
+        np.testing.assert_array_equal(originalTlsPoints2, branches[1].tlsPoints)

@@ -6,12 +6,13 @@ from scipy.sparse.csgraph import breadth_first_order, connected_components, dijk
 from scipy.spatial import KDTree
 from typing import Any, Dict, Tuple
 
+from src.utils.geometry import pointSort
+
 
 def generateSeeds(tlsPoints: npt.NDArray[np.double], # must be sorted by height and tlsPoints[:,2] must be height
                   parameters: Dict[str, Any]):
     tlsPoints = np.unique(tlsPoints, axis=0)
-    tlsPoints = np.sort(tlsPoints.view([('x', np.double), ('y', np.double), ('z', np.double)]).squeeze(-1),
-                        order=['z','x','y']).view((np.double, 3))
+    tlsPoints = pointSort(tlsPoints, ('z','x','y'))
 
     basePoint, baseRadius = findBase(tlsPoints)
     basePointIndex = len(tlsPoints)

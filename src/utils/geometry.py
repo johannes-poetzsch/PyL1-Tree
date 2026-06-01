@@ -1,9 +1,10 @@
 import cupy as cp
 import numpy as np
 import numpy.typing as npt
+from scipy.spatial import KDTree
 from scipy.stats import ttest_ind
 
-from typing import Optional, Tuple
+from typing import List, Literal, Optional, Tuple
 
 
 def angle(directions_a: npt.NDArray,
@@ -24,12 +25,64 @@ def distanceAlongDirection(startPoints: npt.NDArray[np.double],
     return np.vecdot(endPoints - startPoints, direction)
 
 
+def findClosestCylinders(axisStarts: npt.NDArray[np.double],
+                         axisEnds: npt.NDArray[np.double],
+                         radii: List[float] | npt.NDArray[float],
+                         points: npt.NDArray[np.double]
+                         ) -> Tuple[npt.NDArray[np.intp], npt.NDArray[np.double]]:
+    startLookUp = KDTree(axisStarts)
+    endLookUp = KDTree(axisEnds)
+
+    _, closestStarts = startLookUp.query(points)
+    _, closestEnds = endLookUp.query(points)
+
+    startCylinderDistances = cylinderPointsDistance(axisStarts[closestStarts], axisEnds[closestStarts],
+                                                    radii[closestStarts], points)
+    endCylinderDistances = cylinderPointsDistance(axisStarts[closestEnds], axisEnds[closestEnds],
+                                                  radii[closestEnds], points)
+
+    closerToStart = startCylinderDistances < endCylinderDistances
+    cylinderDistances = np.where(closerToStart, startCylinderDistances, endCylinderDistances)
+    closestCylinders = np.where(closerToStart, closestStarts, closestEnds)
+
+    pointsLookUp = KDTree(points)
+    maxDistance = cylinderDistances.max()
+    cylinderLengths = np.linalg.norm(axisEnds - axisStarts, axis=1)
+    for i in range(len(axisStarts)):
+        maxAxisDistance = radii[i] + maxDistance
+        searchRange = np.sqrt((cylinderLengths[i]/2)**2 + maxAxisDistance**2)
+        cylinderPoints = np.stack([axisStarts[i], axisEnds[i]], axis=0)
+        localPointsIndices = pointsLookUp.query_ball_point(cylinderPoints, searchRange)
+
+        maxLocalAxisDistance = radii[i] + cylinderDistances[localPointsIndices].max()
+        searchRange = np.sqrt((cylinderLengths[i]/2)**2 + maxLocalAxisDistance**2)
+        localPointsIndices = np.unique(pointsLookUp.query_ball_point(cylinderPoints, searchRange))
+
+        newDistances = cylinderPointsDistance(axisStarts[localPointsIndices], axisEnds[localPointsIndices],
+                                              radii[localPointsIndices], points)
+
+        improved = newDistances < cylinderDistances[localPointsIndices]
+        improvedIndices = localPointsIndices[improved]
+        cylinderDistances[improvedIndices] = newDistances[improved]
+        closestCylinders[improvedIndices] = i
+
+    return closestCylinders, cylinderDistances
+
+
 def getStripAngles(strip: npt.NDArray[np.double]) -> Optional[npt.NDArray[np.double]]:
-    if len(strip) < 3:
-        return None
     directions = normalizeVectors(strip[1:] - strip[:-1])
     angles = angle(directions[:-1], directions[1:])
     return angles
+
+
+def getValueOccurrences(array: npt.NDArray[np.intp|int]) -> List[Tuple[int, npt.NDArray[np.intp]]]:
+    occurrences = []
+    order = np.argsort(array)
+    values, indices, counts = np.unique(array[order], return_index=True, return_counts=True)
+    for v, i, c in zip(values, indices, counts):
+        occurrences.append((v, order[i:i+c]))
+
+    return occurrences
 
 
 def linesPointsDistances(lineStartPoints: npt.NDArray, # (L,D)
@@ -51,8 +104,18 @@ def linesPointsDistances(lineStartPoints: npt.NDArray, # (L,D)
     return distances
 
 
+def cylinderPointsDistance(axisStarts: npt.NDArray[np.double],
+                           axisEnds: npt.NDArray[np.double],
+                           radius: float,
+                           points: npt.NDArray[np.double]) -> float:
+    axisDistances = linesPointsDistances(axisStarts, axisEnds, points)
+    return np.abs(axisDistances - radius)
+
+
 def movingTTest(sequence: npt.NDArray[np.double]) -> Optional[int]:
     windowSize = max(5, int(np.floor(len(sequence) / 10)))
+    if len(sequence) < 2 * windowSize:
+        return None
 
     for startIdx, doubleWindow in enumerate(np.lib.stride_tricks.sliding_window_view(sequence, 2*windowSize)):
         firstWindow = doubleWindow[:windowSize]
@@ -73,16 +136,25 @@ def normalizeVectors(vectors: npt.NDArray):
     return vectors / xp.expand_dims(xp.linalg.norm(vectors, axis=-1), axis=-1)
 
 
+def pointSort(points: npt.NDArray[np.double],
+              order: Tuple[Literal['x', 'y', 'z'], Literal['x', 'y', 'z'], Literal['x', 'y', 'z']] = ('x', 'y', 'z')
+              ) -> npt.NDArray[np.double]:
+    return np.sort(points.view([('x', np.double), ('y', np.double), ('z', np.double)]).squeeze(-1),
+                   order=order).view((np.double, 3))
+
+
 def stripPointsDistances(strip: npt.NDArray, # (L+1,D)
                          points: npt.NDArray, # (N,D)
                          trimStart = False,
                          trimEnd = False,
                          returnTrimming = False,
                          returnPedalInfo = False
-                         ) -> (Tuple[npt.NDArray[np.double], npt.NDArray[np.double], npt.NDArray[np.intp], npt.NDArray[np.intp], npt.NDArray[np.bool]] |
-                               Tuple[npt.NDArray[np.double], npt.NDArray[np.double], npt.NDArray[np.intp], npt.NDArray[np.intp]] |
+                         ) -> (Tuple[npt.NDArray[np.double], npt.NDArray[np.double], npt.NDArray[np.intp], npt.NDArray[np.bool]] |
+                               Tuple[npt.NDArray[np.double], npt.NDArray[np.double], npt.NDArray[np.intp]] |
                                Tuple[npt.NDArray[np.double], npt.NDArray[np.bool]] |
                                npt.NDArray[np.double]):
+    if len(strip) < 2:
+        raise ValueError('Strip must have at least 2 points')
     xp = cp.get_array_module(strip, points)
     segmentStarts = strip[:-1]
     segmentEnds = strip[1:]
@@ -92,8 +164,7 @@ def stripPointsDistances(strip: npt.NDArray, # (L+1,D)
     # TODO: compare runtime to torch vecdot
     tMatrix = xp.einsum('LND,LD->LN', pointsToSegmentStarts, segmentVectors) / xp.einsum('LD,LD->L', segmentVectors, segmentVectors)[:,xp.newaxis] # (L,N)
     del pointsToSegmentStarts
-    xp.clip(tMatrix, 0, 1, out=tMatrix)
-    pedalPoints = segmentStarts[:,xp.newaxis] - tMatrix[:,:,xp.newaxis] * segmentVectors[:,xp.newaxis] # (L,N,D)
+    pedalPoints = segmentStarts[:,xp.newaxis] - xp.clip(tMatrix, 0, 1)[:,:,xp.newaxis] * segmentVectors[:,xp.newaxis] # (L,N,D)
 
     segmentDistances: npt.NDArray = xp.linalg.norm(pedalPoints - points, axis=-1) # (L,N)
     closestSegment = segmentDistances.argmin(axis=0) # (N)
@@ -102,21 +173,18 @@ def stripPointsDistances(strip: npt.NDArray, # (L+1,D)
     trimmed = np.zeros_like(distances, dtype=bool)
 
     if trimStart:
-        trimmed |= (closestSegment == 0) & (tMatrix[0] == 0)
+        trimmed |= (closestSegment == 0) & (tMatrix[0] < 0)
     if trimEnd:
         endIdx = len(segmentVectors) - 1
-        trimmed |= (closestSegment == endIdx) & (tMatrix[endIdx] == 1)
+        trimmed |= (closestSegment == endIdx) & (tMatrix[endIdx] > 1)
 
     untrimmed = ~trimmed
     if returnPedalInfo:
         pedalPoints = np.take_along_axis(pedalPoints, np.expand_dims(closestSegment, axis=(0,2)), axis=0).squeeze(0)
-        atStartPoint = np.take_along_axis(tMatrix, closestSegment[np.newaxis], axis=0).squeeze(0) < 0.5
-        closestPointIndices = np.where(atStartPoint, closestSegment, closestSegment+1)
         if returnTrimming:
-            return distances, pedalPoints, closestSegment, closestPointIndices, trimmed
+            return distances, pedalPoints, closestSegment, trimmed
         else:
-            return (distances[untrimmed], pedalPoints[untrimmed],
-                    closestSegment[untrimmed], closestPointIndices[untrimmed])
+            return distances[untrimmed], pedalPoints[untrimmed], closestSegment[untrimmed]
     else:
         if returnTrimming:
             return distances, trimmed
