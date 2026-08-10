@@ -1,4 +1,7 @@
+from itertools import count
+
 import numpy as np
+import numpy.typing as npt
 from typing import Dict, Tuple
 
 from src.objects.branch import Branch
@@ -6,7 +9,18 @@ from src.utils.geometry import angle, normalizeVectors
 from src.utils.iteration import breadthFirstSearch
 
 
-def constructTreeModel(trunk: Branch) -> Tuple[Dict[Branch, float], Dict[Branch, float], Dict[Branch, bool]]:
+cylinderDataType = [
+    ("parent_cylinder_id", np.intp),
+    ("branch_id_centrifugal", np.intp),
+    ("branch_id_gaaliche", np.intp),
+    ("branch_order_centrifugal", np.intp),
+    ("branch_order_gaaliche", np.intp),
+    ("start", np.double, 3),
+    ("end", np.double, 3),
+    ("radius", np.double)]
+
+
+def constructTreeModel(trunk: Branch) -> npt.NDArray:
     branchRadiiCentrifugal, radiusIsCredible = calculateBranchRadiiCentrifugal(trunk)
     continuations = getContinuations(trunk, branchRadiiCentrifugal)
     branchRadiiGaaliche = {}
@@ -15,7 +29,10 @@ def constructTreeModel(trunk: Branch) -> Tuple[Dict[Branch, float], Dict[Branch,
             branchRadiiGaaliche[branch] = branchRadiiCentrifugal[branch]
         else:
             branchRadiiGaaliche[branch] = branchRadiiCentrifugal[branch.parent]
-    return branchRadiiCentrifugal, branchRadiiGaaliche, radiusIsCredible
+
+    cylinderData = convertToCylinders(trunk, branchRadiiCentrifugal, continuations)
+
+    return cylinderData
 
 
 def calculateBranchRadiiCentrifugal(trunk: Branch) -> Tuple[Dict[Branch, float], Dict[Branch, bool]]:
@@ -99,3 +116,53 @@ def getContinuations(trunk: Branch, branchRadii: Dict[Branch, float]) -> Dict[Br
         continuations[branch] = continuationBranch
 
     return continuations
+
+
+def convertToCylinders(trunk: Branch, branchRadii: Dict[Branch, float], continuations: Dict[Branch, Branch]
+                       ) -> npt.NDArray:
+    branches = list(breadthFirstSearch(trunk))
+    cylinderCount = sum(len(b) - 1 for b in branches)
+    cylinderData = np.empty(cylinderCount, dtype=cylinderDataType)
+
+    offset = 0
+    endCylinderIDs = {}
+    branchOrderCentrifugal = {}
+    branchOrderGaaliche = {}
+    newBranchIdCentrifugal = count()
+    newBranchIdGaaliche = count()
+    branchIdGaaliche = {}
+
+    for branch in branches:
+        branchCylinderCount = len(branch) - 1
+        endCylinderIDs[branch] = offset + branchCylinderCount - 1
+        cylinderData["start"][offset:offset+branchCylinderCount] = branch[:-1]
+        cylinderData["end"][offset:offset+branchCylinderCount] = branch[1:]
+        cylinderData["radius"][offset:offset+branchCylinderCount] = branchRadii[branch]
+        if branchCylinderCount > 1:
+            cylinderData["parent_cylinder_id"][offset+1:offset+branchCylinderCount] = np.arange(offset, offset + branchCylinderCount - 1, dtype=np.intp)
+
+        if branch.isStem():
+            branchOrderCentrifugal[branch] = 0
+            branchOrderGaaliche[branch] = 0
+            branchIdGaaliche[branch] = next(newBranchIdGaaliche)
+            cylinderData["parent_cylinder_id"][offset] = -1
+        else:
+            parent = branch.parent
+            cylinderData["parent_cylinder_id"][offset] = endCylinderIDs[parent]
+            branchOrderCentrifugal[branch] = branchOrderCentrifugal[parent] + 1
+
+            if branch is continuations[parent]:
+                branchIdGaaliche[branch] = branchIdGaaliche[parent]
+                branchOrderGaaliche[branch] = branchOrderGaaliche[parent]
+            else:
+                branchIdGaaliche[branch] = next(newBranchIdGaaliche)
+                branchOrderGaaliche[branch] = branchOrderGaaliche[parent] + 1
+
+        cylinderData["branch_id_centrifugal"][offset:offset+branchCylinderCount] = next(newBranchIdCentrifugal)
+        cylinderData["branch_id_gaaliche"][offset:offset+cylinderCount] = branchIdGaaliche[branch]
+        cylinderData["branch_order_centrifugal"][offset:offset+cylinderCount] = branchOrderCentrifugal[branch]
+        cylinderData["branch_order_gaaliche"][offset:offset+cylinderCount] = branchOrderGaaliche[branch]
+
+        offset += branchCylinderCount
+
+    return cylinderData
