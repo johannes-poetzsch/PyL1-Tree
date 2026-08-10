@@ -85,25 +85,6 @@ def getValueOccurrences(array: npt.NDArray[np.intp|int]) -> List[Tuple[int, npt.
     return occurrences
 
 
-def linesPointsDistances(lineStartPoints: npt.NDArray, # (L,D)
-                         lineEndPoints: npt.NDArray, # (L,D) or (D)
-                         points: npt.NDArray, # (N,D)
-                         ) -> npt.NDArray | Tuple[npt.NDArray, npt.NDArray]:
-    xp = cp.get_array_module(lineStartPoints, lineEndPoints, points)
-    lineVectors = lineStartPoints - lineEndPoints # (L,D)
-
-    pointsToLineStartPoints = lineStartPoints[:,xp.newaxis] - points # (L,N,D)
-    # TODO: compare runtime to torch vecdot
-    tMatrix = xp.einsum('LND,LD->LN', pointsToLineStartPoints, lineVectors) / xp.einsum('LD,LD->L', lineVectors, lineVectors)[:,xp.newaxis] # (L,N)
-    del pointsToLineStartPoints
-    xp.clip(tMatrix, 0, 1, out=tMatrix)
-    pedalPoints = lineStartPoints[:,xp.newaxis] - tMatrix[:,:,xp.newaxis] * lineVectors[:,xp.newaxis] # (L,N,D)
-    del tMatrix
-    distances = xp.linalg.norm(pedalPoints - points, axis=-1) # (L,N)
-
-    return distances
-
-
 def cylinderPointsDistance(axisStarts: npt.NDArray[np.double],
                            axisEnds: npt.NDArray[np.double],
                            radius: float,
@@ -136,19 +117,39 @@ def normalizeVectors(vectors: npt.NDArray):
     return vectors / xp.expand_dims(xp.linalg.norm(vectors, axis=-1), axis=-1)
 
 
-def pointSort(points: npt.NDArray[np.double],
+def pointSort(points: npt.NDArray,
               order: Tuple[Literal['x', 'y', 'z'], Literal['x', 'y', 'z'], Literal['x', 'y', 'z']] = ('x', 'y', 'z')
-              ) -> npt.NDArray[np.double]:
-    return np.sort(points.view([('x', np.double), ('y', np.double), ('z', np.double)]).squeeze(-1),
-                   order=order).view((np.double, 3))
+              ) -> npt.NDArray:
+    return np.sort(points.view([('x', points.dtype), ('y', points.dtype), ('z', points.dtype)]).squeeze(-1),
+                   order=order).view((points.dtype, 3))
 
 
-def stripPointsDistances(strip: npt.NDArray, # (L+1,D)
+def linesPointsDistances(lineStartPoints: npt.NDArray, # (L,D)
+                         lineEndPoints: npt.NDArray, # (L,D) or (D)
                          points: npt.NDArray, # (N,D)
+                         ) -> npt.NDArray | Tuple[npt.NDArray, npt.NDArray]:
+    xp = cp.get_array_module(lineStartPoints, lineEndPoints, points)
+    lineVectors = lineStartPoints - lineEndPoints # (L,D)
+
+    pointsToLineStartPoints = lineStartPoints[:,xp.newaxis] - points # (L,N,D)
+    # TODO: compare runtime to torch vecdot
+    tMatrix = xp.einsum('LND,LD->LN', pointsToLineStartPoints, lineVectors) / xp.einsum('LD,LD->L', lineVectors, lineVectors)[:,xp.newaxis] # (L,N)
+    del pointsToLineStartPoints
+    xp.clip(tMatrix, 0, 1, out=tMatrix)
+    pedalPoints = lineStartPoints[:,xp.newaxis] - tMatrix[:,:,xp.newaxis] * lineVectors[:,xp.newaxis] # (L,N,D)
+    del tMatrix
+    distances = xp.linalg.norm(pedalPoints - points, axis=-1) # (L,N)
+
+    return distances
+
+
+def stripPointsDistances(strip: npt.NDArray,  # (L+1,D)
+                         points: npt.NDArray,  # (N',D)
                          trimStart = False,
                          trimEnd = False,
                          returnTrimming = False,
-                         returnPedalInfo = False
+                         returnPedalInfo = False,
+                         maxBatchSize = 1024
                          ) -> (Tuple[npt.NDArray[np.double], npt.NDArray[np.double], npt.NDArray[np.intp], npt.NDArray[np.bool]] |
                                Tuple[npt.NDArray[np.double], npt.NDArray[np.double], npt.NDArray[np.intp]] |
                                Tuple[npt.NDArray[np.double], npt.NDArray[np.bool]] |
@@ -158,35 +159,46 @@ def stripPointsDistances(strip: npt.NDArray, # (L+1,D)
     xp = cp.get_array_module(strip, points)
     segmentStarts = strip[:-1]
     segmentEnds = strip[1:]
-
     segmentVectors = segmentStarts - segmentEnds # (L,D)
-    pointsToSegmentStarts = segmentStarts[:,xp.newaxis] - points # (L,N,D)
-    # TODO: compare runtime to torch vecdot
-    tMatrix = xp.einsum('LND,LD->LN', pointsToSegmentStarts, segmentVectors) / xp.einsum('LD,LD->L', segmentVectors, segmentVectors)[:,xp.newaxis] # (L,N)
-    del pointsToSegmentStarts
-    pedalPoints = segmentStarts[:,xp.newaxis] - xp.clip(tMatrix, 0, 1)[:,:,xp.newaxis] * segmentVectors[:,xp.newaxis] # (L,N,D)
 
-    segmentDistances: npt.NDArray = xp.linalg.norm(pedalPoints - points, axis=-1) # (L,N)
-    closestSegment = segmentDistances.argmin(axis=0) # (N)
-    distances: npt.NDArray[np.double] = np.take_along_axis(segmentDistances, closestSegment[np.newaxis], axis=0).squeeze(0)
+    distances = np.empty(len(points), dtype=np.double)
+    pedalPoints = np.empty_like(points, dtype=np.double)
+    closestSegments = np.empty(len(points), dtype=np.intp)
+    trimmed = np.zeros(len(points), dtype=np.bool)
 
-    trimmed = np.zeros_like(distances, dtype=bool)
+    batchCount = max(1, np.ceil(len(points) / maxBatchSize).astype(np.intp))
+    for batchPoints, batchDistances, batchPedalPoints, batchClosestSegments, batchTrimmed in zip(
+        np.array_split(points, batchCount), np.array_split(distances, batchCount),
+        np.array_split(pedalPoints, batchCount), np.array_split(closestSegments, batchCount),
+        np.array_split(trimmed, batchCount)
+    ):
+        pointsToSegmentStarts = segmentStarts - batchPoints[:,np.newaxis] # (N,L,D)
+        ## TODO: compare runtime to cupy/torch vecdot
+        #tMatrix = xp.einsum('NLD,LD->NL', pointsToSegmentStarts, segmentVectors) / xp.einsum('LD,LD->L', segmentVectors, segmentVectors) # (N,L)
+        tMatrix = np.vecdot(pointsToSegmentStarts, segmentVectors) / np.vecdot(segmentVectors, segmentVectors) # (N,L)
+        del pointsToSegmentStarts
+        potentialPedalPoints = segmentStarts[xp.newaxis] - xp.clip(tMatrix, 0, 1)[:,:,xp.newaxis] * segmentVectors[xp.newaxis] # (N,L,D)
 
-    if trimStart:
-        trimmed |= (closestSegment == 0) & (tMatrix[0] < 0)
-    if trimEnd:
-        endIdx = len(segmentVectors) - 1
-        trimmed |= (closestSegment == endIdx) & (tMatrix[endIdx] > 1)
+        segmentDistances: npt.NDArray = xp.linalg.norm(potentialPedalPoints - batchPoints[:,np.newaxis], axis=-1) # (N,L)
+        batchClosestSegments[:] = segmentDistances.argmin(axis=-1) # (N)
+        batchDistances[:] = np.take_along_axis(segmentDistances, batchClosestSegments[:,np.newaxis], axis=-1).squeeze() # (N)
 
-    untrimmed = ~trimmed
+        if returnPedalInfo:
+            batchPedalPoints[:] = np.take_along_axis(potentialPedalPoints, batchClosestSegments[:,np.newaxis,np.newaxis], axis=1).squeeze() # (N,D)
+        if trimStart:
+            batchTrimmed |= (batchClosestSegments == 0) & (tMatrix[:,0] < 0)
+        if trimEnd:
+            endIdx = len(segmentVectors) - 1
+            batchTrimmed |= (batchClosestSegments == endIdx) & (tMatrix[:,endIdx] > 1)
+
     if returnPedalInfo:
-        pedalPoints = np.take_along_axis(pedalPoints, np.expand_dims(closestSegment, axis=(0,2)), axis=0).squeeze(0)
         if returnTrimming:
-            return distances, pedalPoints, closestSegment, trimmed
+            return distances, pedalPoints, closestSegments, trimmed
         else:
-            return distances[untrimmed], pedalPoints[untrimmed], closestSegment[untrimmed]
+            untrimmed = ~trimmed
+            return distances[untrimmed], pedalPoints[untrimmed], closestSegments[untrimmed]
     else:
         if returnTrimming:
             return distances, trimmed
         else:
-            return distances[untrimmed]
+            return distances[~trimmed]

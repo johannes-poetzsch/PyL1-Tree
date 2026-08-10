@@ -3,15 +3,13 @@ __all__ = ['adjustBifurcations']
 import cupy as cp
 import numpy as np
 import numpy.typing as npt
-import torch
 
 from itertools import combinations
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.objects.branch import Branch
-from src.utils.geometry import linesPointsDistances, normalizeVectors, angle
+from src.utils.geometry import linesPointsDistances, normalizeVectors, angle, stripPointsDistances
 from src.utils.iteration import breadthFirstSearch
-#from src.utils.kernels import cum_min
 
 
 def adjustBifurcations(trunk: Branch, parameters: Dict[str, Any]):
@@ -84,9 +82,11 @@ def determineAdjustment(associatedBranches: List[Branch],
     firstSegmentDistances = {}
     restBranchDistances = {}
     for branch in associatedBranches:
-        firstSegmentDistance, restBranchDistance = branch.getPartDistances(tlsPoints)
-        firstSegmentDistances[branch] = firstSegmentDistance # (N,3)
-        restBranchDistances[branch] = restBranchDistance # (N,3)
+        firstSegmentDistances[branch] = stripPointsDistances(branch[:2], tlsPoints) # (N,3)
+        if len(branch) <= 2:
+            restBranchDistances[branch] = np.full(len(tlsPoints), np.inf, dtype=np.double) # (N,3)
+        else:
+            restBranchDistances[branch] = stripPointsDistances(branch[1:], tlsPoints) # (N,3)
 
     targetPoints = {}
     interpolationIndices = {}
@@ -108,27 +108,26 @@ def determineAdjustment(associatedBranches: List[Branch],
     associatedTlsToRemovedSegmentsSums = {}
     associatedTlsToNewBifurcationSums = {}
     associatedTlsCounts = {}
-    # TODO: iterate over tlsPoints batches
-    for pointBatch in [tlsPoints]:
-        for targetBranch in associatedBranches:
-            if skip[targetBranch]:
-                continue
 
-            otherBranches = [b for b in associatedBranches if b is not targetBranch]
-            newDistancesSum, associatedTlsToRemovedSegmentsSum, associatedTlsToNewBifurcationSum, associatedTlsCount = (
-                getDistanceMetrics(targetPoints[targetBranch], otherBranches, pointBatch,
-                                   isCredible[targetBranch], firstSegmentDistances, restBranchDistances))
-            
-            if targetBranch in associatedTlsCounts:
-                newDistancesSums[targetBranch] += newDistancesSum
-                associatedTlsToRemovedSegmentsSums[targetBranch] += associatedTlsToRemovedSegmentsSum
-                associatedTlsToNewBifurcationSums[targetBranch] += associatedTlsToNewBifurcationSum
-                associatedTlsCounts[targetBranch] += associatedTlsCount
-            else:
-                newDistancesSums[targetBranch] = newDistancesSum
-                associatedTlsToRemovedSegmentsSums[targetBranch] = associatedTlsToRemovedSegmentsSum
-                associatedTlsToNewBifurcationSums[targetBranch] = associatedTlsToNewBifurcationSum
-                associatedTlsCounts[targetBranch] = associatedTlsCount
+    for targetBranch in associatedBranches:
+        if skip[targetBranch]:
+            continue
+
+        otherBranches = [b for b in associatedBranches if b is not targetBranch]
+        newDistancesSum, associatedTlsToRemovedSegmentsSum, associatedTlsToNewBifurcationSum, associatedTlsCount = (
+            getDistanceMetrics(targetPoints[targetBranch], otherBranches, tlsPoints, isCredible[targetBranch],
+                               firstSegmentDistances, restBranchDistances))
+
+        if targetBranch in associatedTlsCounts:
+            newDistancesSums[targetBranch] += newDistancesSum
+            associatedTlsToRemovedSegmentsSums[targetBranch] += associatedTlsToRemovedSegmentsSum
+            associatedTlsToNewBifurcationSums[targetBranch] += associatedTlsToNewBifurcationSum
+            associatedTlsCounts[targetBranch] += associatedTlsCount
+        else:
+            newDistancesSums[targetBranch] = newDistancesSum
+            associatedTlsToRemovedSegmentsSums[targetBranch] = associatedTlsToRemovedSegmentsSum
+            associatedTlsToNewBifurcationSums[targetBranch] = associatedTlsToNewBifurcationSum
+            associatedTlsCounts[targetBranch] = associatedTlsCount
 
     adjustmentIdx = None
     adjustmentPoint = None
@@ -138,12 +137,16 @@ def determineAdjustment(associatedBranches: List[Branch],
         if skip[targetBranch]:
             continue
 
-        # TODO: handle division by 0
-        meanDistancesToRemovedSegments = associatedTlsToRemovedSegmentsSums[targetBranch] / associatedTlsCounts[targetBranch]
-        meanDistancesToNewBifurcation = associatedTlsToNewBifurcationSums[targetBranch] / associatedTlsCounts[targetBranch]
+        tlsCounts = associatedTlsCounts[targetBranch].astype(np.double)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            # if tlsCount is 0, these are both inf or nan and the Criteria is not met as intended
+            meanDistancesToRemovedSegments = associatedTlsToRemovedSegmentsSums[targetBranch] / tlsCounts
+            meanDistancesToNewBifurcation = associatedTlsToNewBifurcationSums[targetBranch] / tlsCounts
 
-        relativeDistanceChange = np.abs((meanDistancesToRemovedSegments - meanDistancesToNewBifurcation) / meanDistancesToNewBifurcation)
-        relativeLengthChange = np.abs((removedSegmentsLength[targetBranch] - newBifurcationLength[targetBranch]) / removedSegmentsLength[targetBranch])
+        relativeDistanceChange = np.abs((meanDistancesToRemovedSegments - meanDistancesToNewBifurcation)
+                                        / meanDistancesToNewBifurcation)
+        relativeLengthChange = np.abs((removedSegmentsLength[targetBranch] - newBifurcationLength[targetBranch])
+                                      / removedSegmentsLength[targetBranch])
 
         meetsCriteria = np.logical_and(
             meanDistancesToNewBifurcation < meanDistancesToRemovedSegments,
@@ -172,48 +175,57 @@ def getDistanceMetrics(targetPoints: npt.NDArray[np.double],
                        tlsPoints: npt.NDArray[np.double],
                        isCredible: npt.NDArray[np.bool],
                        firstSegmentDistances: Dict[Branch, npt.NDArray],
-                       restBranchDistances: Dict[Branch, npt.NDArray]
+                       restBranchDistances: Dict[Branch, npt.NDArray],
+                       maxBatchSize: int = 1024
                        ) -> Tuple[npt.NDArray[np.double], npt.NDArray[np.double], npt.NDArray[np.double], npt.NDArray[np.double]]:
-    # Distances to the new segments between the new bifurcation points (targetPoints) and the first remaining skeleton points of the other branches
     xp = cp.get_array_module(tlsPoints)
-    targetPoints = xp.asarray(targetPoints)
-    distancesToNewBifurcation = xp.min(xp.stack([linesPointsDistances(targetPoints[1:][isCredible], xp.asarray(b[1]),
-                                                                      tlsPoints)
-                                                 for b in otherBranches]),
-                                       axis=0)
+    newDistancesSum = xp.double(0)
+    associatedTlsToRemovedSegmentsSum = xp.double(0)
+    associatedTlsToNewBifurcationSum = xp.double(0)
+    associatedTlsCount = xp.intp(0)
     
-    targetDistances = linesPointsDistances(targetPoints[:-1], targetPoints[1:], tlsPoints) # (T,N)
+    batchCount = max(1, np.ceil(len(tlsPoints) / maxBatchSize).astype(np.intp))
+    batchedFirstSegmentDistances = {b: np.array_split(d, batchCount) for b, d in firstSegmentDistances.items()}
+    batchedRestBranchDistances = {b: np.array_split(d, batchCount) for b, d in restBranchDistances.items()}
 
-    if xp is cp:
-        distancesUntilTargets = cp.asarray(torch.as_tensor(targetDistances, device='cuda').cummin(dim=0).values)
-        #distancesUntilTargets = cum_min(targetDistances, axis=0, reversed=False) # (T,N)
-    else:
+    for batchIdx, batchPoints in enumerate(np.array_split(tlsPoints, batchCount)):
+        # Distances to the new segments between the new bifurcation points (targetPoints) and the first remaining skeleton points of the other branches
+        targetPoints = xp.asarray(targetPoints)
+        distancesToNewBifurcation = xp.min(xp.stack(
+            [linesPointsDistances(targetPoints[1:][isCredible], xp.asarray(b[1]), batchPoints) for b in otherBranches]),
+            axis=0)
+
+        targetDistances = linesPointsDistances(targetPoints[:-1], targetPoints[1:], batchPoints) # (T,N')
+
+        #if xp is cp:
+        #    distancesUntilTargets = cp.asarray(torch.as_tensor(targetDistances, device='cuda').cummin(dim=0).values)
+        #    #distancesUntilTargets = cum_min(targetDistances, axis=0, reversed=False) # (T,N')
+        #else:
         distancesUntilTargets = np.minimum.accumulate(targetDistances, axis=0)
-    distancesToRemovedSegments = xp.minimum(distancesUntilTargets[isCredible], 
-                                            xp.min(xp.stack([firstSegmentDistances[b] for b in otherBranches]), axis=0))
-    del distancesUntilTargets
+        distancesToRemovedSegments = xp.minimum(distancesUntilTargets[isCredible], xp.min(
+            xp.stack([batchedFirstSegmentDistances[b][batchIdx] for b in otherBranches]), axis=0))
+        del distancesUntilTargets
 
-    if xp is cp:
-        distancesFromTargets = cp.flipud(cp.asarray(torch.as_tensor(targetDistances, device='cuda').flipud().cummin(dim=0).values))
-        #distancesFromTargets = cum_min(targetDistances, axis=0, reversed=True) # (T,N)
-    else:
+        #if xp is cp:
+        #    distancesFromTargets = cp.flipud(cp.asarray(torch.as_tensor(targetDistances, device='cuda').flipud().cummin(dim=0).values))
+        #    #distancesFromTargets = cum_min(targetDistances, axis=0, reversed=True) # (T,N')
+        #else:
         distancesFromTargets = np.flipud(np.minimum.accumulate(np.flipud(targetDistances)))
-    del targetDistances
-    distancesFromTargets = xp.roll(distancesFromTargets, -1, axis=0)
-    distancesFromTargets[-1] = xp.inf
+        del targetDistances
+        distancesFromTargets = xp.roll(distancesFromTargets, -1, axis=0)
+        distancesFromTargets[-1] = xp.inf
 
-    distancesToUnaffectedSegments = xp.minimum(distancesFromTargets[isCredible],
-                                               xp.minimum.reduce([restBranchDistances[b] for b in otherBranches], axis=0))
-    del distancesFromTargets
+        distancesToUnaffectedSegments = xp.minimum(distancesFromTargets[isCredible], xp.minimum.reduce(
+            [batchedRestBranchDistances[b][batchIdx] for b in otherBranches], axis=0))
+        del distancesFromTargets
 
-    isAtBifurcation = xp.logical_or(distancesToRemovedSegments < distancesToUnaffectedSegments,
-                                    distancesToNewBifurcation < distancesToUnaffectedSegments)
+        isAtBifurcation = xp.logical_or(distancesToRemovedSegments < distancesToUnaffectedSegments,
+                                        distancesToNewBifurcation < distancesToUnaffectedSegments)
 
-    associatedTlsToRemovedSegmentsSum = xp.sum(xp.where(isAtBifurcation, distancesToRemovedSegments, 0), axis=1)
-    associatedTlsToNewBifurcationSum = xp.sum(xp.where(isAtBifurcation, distancesToNewBifurcation, 0), axis=1)
-    associatedTlsCount = xp.count_nonzero(isAtBifurcation, axis=1)
-
-    newDistancesSum = xp.sum(xp.minimum(distancesToNewBifurcation, distancesToUnaffectedSegments), axis=1)
+        newDistancesSum += xp.sum(xp.minimum(distancesToNewBifurcation, distancesToUnaffectedSegments), axis=1)
+        associatedTlsToRemovedSegmentsSum += xp.sum(xp.where(isAtBifurcation, distancesToRemovedSegments, 0), axis=1)
+        associatedTlsToNewBifurcationSum += xp.sum(xp.where(isAtBifurcation, distancesToNewBifurcation, 0), axis=1)
+        associatedTlsCount += xp.count_nonzero(isAtBifurcation, axis=1)
 
     if xp is cp:
         newDistancesSum = cp.asnumpy(newDistancesSum)

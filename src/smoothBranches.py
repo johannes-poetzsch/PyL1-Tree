@@ -16,13 +16,14 @@ from src.utils.pointMetrics import calculateDensity
 def smoothBranches(trunk: Branch,
                    tlsPoints: npt.NDArray[np.double],
                    unassignedTlsPoints: npt.NDArray[np.double],
-                   parameters: Dict[str, any]) -> npt.NDArray[np.double]:
+                   parameters: Dict[str, Any],
+                   workers: int = 1) -> npt.NDArray[np.double]:
     cleanUpBranches(trunk, unassignedTlsPoints, includeNewPointsForRanges=False)
 
     tlsLookUp = KDTree(tlsPoints)
     for branch in list(breadthFirstSearch(trunk)):
         smoothBranch(branch, tlsLookUp, 2 * parameters["initialSearchRange"], parameters["resolution"],
-                     np.deg2rad(parameters["smoothAngleThreshold"]))
+                     np.deg2rad(parameters["smoothAngleThreshold"]), workers)
 
     return unassignedTlsPoints
 
@@ -73,13 +74,14 @@ def smoothBranch(branch: Branch,
                  tlsLookUp: KDTree,
                  searchRange: float,
                  resolution: float,
-                 smoothAngleThreshold: float):
+                 smoothAngleThreshold: float,
+                 workers: int = 1):
     _, trimmed = branch.getDistances(branch.tlsPoints, trimStart=True, trimEnd=True, returnTrimming=True)
     tlsPoints = branch.tlsPoints[~trimmed]
     if len(tlsPoints) < 10:
         return
 
-    densities = calculateDensity(tlsPoints, tlsLookUp, searchRange)
+    densities = calculateDensity(tlsPoints, tlsLookUp, searchRange, workers)
     weightedPoints = tlsPoints * densities[:, np.newaxis]
 
     startPoint: npt.NDArray[np.double] = branch.skeletonPoints[0]

@@ -1,29 +1,33 @@
+from multiprocessing import Pool
 import numpy as np
 import numpy.typing as npt
 from scipy.spatial import KDTree
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 from .findBranches import findNewBranches
+from .runIteration import calculateDirectionalDegree, runIteration, setIterationParameters
 from ..objects.branch import Branch
-from ..utils.pointMetrics import calculateDensity, decayingWeights
+from ..utils.pointMetrics import calculateDensity
 
 
 def generateBranches(tlsPoints: npt.NDArray[np.double],
                      seedPoints: npt.NDArray[np.double],
                      relPathLocations: npt.NDArray[np.double],
-                     parameters: Dict[str, Any]
+                     parameters: Dict[str, Any],
+                     workers: int = 1
                      ) -> Tuple[List[Branch], npt.NDArray[np.double]]:
     skeletonBranches: List[Branch] = []
     tlsLookUp = KDTree(tlsPoints)
     skeletonData = initializeSkeleton(seedPoints, relPathLocations)
-    tlsDensities = calculateDensity(None, tlsLookUp, 2 * parameters["initialSearchRange"])
+    tlsDensities = calculateDensity(None, tlsLookUp, 2 * parameters["initialSearchRange"], workers)
+    searchRange = parameters["searchRange"]
+    maxSearchRange = 2 * parameters["baseRadius"]
 
-    while parameters["searchRange"] <= 2 * parameters["baseRadius"]:
-        print(parameters["searchRange"], " / ", 2 * parameters["baseRadius"])
+    while searchRange <= maxSearchRange:
+        print(searchRange, " / ", maxSearchRange)
         for _ in range(parameters["maxIterationNumFixedRange"]):
-            recomputeSkeletonPoints(skeletonData, tlsLookUp, tlsDensities,
-                                    parameters["searchRange"], parameters["baseRadius"],
-                                    parameters["minMu"], parameters["maxMu"])
+            recomputeSkeletonPoints(skeletonData, tlsLookUp, tlsDensities, searchRange,
+                                    parameters["baseRadius"], parameters["minMu"], parameters["maxMu"], workers)
 
         skeletonData = filterCloseDataPoints(skeletonData, parameters["nearThreshold"])
         computeSmoothDirectionalDegrees(skeletonData, parameters["kSmoothSigma"])
@@ -35,7 +39,7 @@ def generateBranches(tlsPoints: npt.NDArray[np.double],
                                                 parameters["sigmaTracingThreshold"],
                                                 parameters["branchSizeThreshold"]))
 
-        parameters["searchRange"] *= 1 + parameters["iterationSpeed"]
+        searchRange *= 1 + parameters["iterationSpeed"]
 
     unfixedPoints = skeletonData["Coords"][~skeletonData["isFix"]]
 
@@ -63,108 +67,29 @@ def recomputeSkeletonPoints(skeletonData: npt.NDArray,
                             searchRange: float,
                             baseRadius: float,
                             minMu: float,
-                            maxMu: float) -> npt.NDArray[np.double]:
-    coords = skeletonData["Coords"]
-    skeletonLookUp = KDTree(coords)
-    notFix = np.logical_not(skeletonData["isFix"])
-    notFixCount = np.count_nonzero(notFix)
-    toNotFixIdx = np.empty(len(skeletonData), dtype=np.intp)
-    toNotFixIdx[notFix] = np.arange(notFixCount)
-    changing = np.ones(notFixCount, dtype=bool)
+                            maxMu: float,
+                            workers: int = 1):
+    sigma = skeletonData["Sigma"]
+    changing = ~skeletonData["isFix"]
 
-    neighborRadii = np.maximum(2 * searchRange, skeletonData["relPathLocation"][notFix] * 2 * baseRadius)
-    neighborLists = skeletonLookUp.query_ball_point(coords[notFix], neighborRadii)
+    repulsion = np.zeros((len(skeletonData), 3), dtype=np.double)
+    tlsAverage = np.zeros((len(skeletonData), 3), dtype=np.double)
 
-    repulsion = np.zeros([notFixCount, 3], dtype=np.double)
-    for idx, dataPoint in enumerate(skeletonData):
-        if dataPoint["isFix"]:
-            continue
+    setIterationParameters(baseRadius, searchRange, skeletonData, tlsDensities, tlsLookUp)
+    with Pool(processes=workers) as pool:
+        for idx, c, s, r, a in pool.map(runIteration, np.flatnonzero(changing), chunksize=32):
+            changing[idx], sigma[idx] = c, s
+            if c:
+                repulsion[idx], tlsAverage[idx] = r, a
 
-        nfIdx = toNotFixIdx[idx]
-        neighbors = neighborLists[nfIdx]
-        if len(neighbors) <= 1:
-            changing[nfIdx] = False
-            dataPoint["Sigma"] = 0.5
-            continue
-
-        neighbors = [n for n in neighbors if n != idx]
-
-        neighborVectors = dataPoint["Coords"] - coords[neighbors]
-        neighborDistances = np.linalg.norm(neighborVectors, axis=-1)
-
-        dataPoint["Sigma"] = calculateDirectionalDegree(neighborVectors, neighborDistances, searchRange)
-        repulsion[nfIdx] = calculateRepulsion(neighborVectors, neighborDistances, searchRange)
-
-    tlsNeighborLists = tlsLookUp.query_ball_point(coords[notFix], neighborRadii)
-    tlsAverage = np.zeros([notFixCount, 3], dtype=np.double)
-    for idx, point in enumerate(coords[notFix]):
-        tlsNeighbors = tlsNeighborLists[idx]
-        if len(tlsNeighbors) == 0:
-            changing[idx] = False
-            continue
-
-        neighborDensities = tlsDensities[tlsNeighbors]
-        tlsNeighborPoints = tlsLookUp.data[tlsNeighbors]
-
-        tlsAverage[idx] = calculatePointAverage(point, tlsNeighborPoints, neighborDensities, searchRange)
-
-    minSigma, maxSigma = skeletonData["Sigma"].min(), skeletonData["Sigma"].max()
+    minSigma, maxSigma = sigma.min(), sigma.max()
     sigmaRange = maxSigma - minSigma
     muRange = np.abs(maxMu - minMu)
 
-    mu = (muRange / sigmaRange) * (skeletonData["Sigma"][notFix] - minSigma) + minMu
+    mu = (muRange / sigmaRange) * (sigma - minSigma) + minMu
     changing[mu < 0] = False
 
-    coords[np.flatnonzero(notFix)[changing]] = tlsAverage[changing] + mu[changing,np.newaxis] * repulsion[changing]
-
-
-def calculateDirectionalDegree(neighborVectors: npt.NDArray[np.double],
-                               neighborDistances: Optional[npt.NDArray[np.double]] = None,
-                               searchRange: Optional[float] = None,
-                               useDecayingWeights: bool = True) -> np.double:
-    if len(neighborVectors) <= 3:
-        return 0.5
-
-    if useDecayingWeights:
-        assert(searchRange is not None and neighborDistances is not None)
-        weights = decayingWeights(neighborDistances, 2. * searchRange)
-    else:
-        weights = np.ones(1, dtype=np.double)
-    c = np.matmul(np.matrix_transpose(neighborVectors * weights[:,np.newaxis]), neighborVectors)
-    eigenValues, _ = np.linalg.eig(c)
-
-    sigma = eigenValues.max(axis=-1) / eigenValues.sum(axis=-1)
-    return sigma
-
-
-def calculateRepulsion(neighborVectors: npt.NDArray[np.double],
-                       neighborDistances: npt.NDArray[np.double],
-                       searchRange: float
-                       ) -> npt.NDArray[np.double]:
-    neighborDistances = np.clip(neighborDistances, a_min=0.001 * searchRange, a_max=None)
-
-    weights = decayingWeights(neighborDistances, 2. * searchRange)
-    weights /= neighborDistances
-
-    repulsionTerm = weights.transpose() @ neighborVectors
-
-    return repulsionTerm / weights.sum()
-
-
-def calculatePointAverage(point: npt.NDArray[np.double],
-                          neighborPoints: npt.NDArray[np.double],
-                          densities: npt.NDArray[np.double],
-                          searchRange: float
-                          ) -> npt.NDArray[np.double]:
-    distances = np.linalg.norm(neighborPoints - point, axis=-1)
-    np.clip(distances, a_min=0.001 * searchRange, a_max=None, out=distances)
-
-    weights = decayingWeights(distances, 2 * searchRange)
-    weights *= densities
-
-    averageTerm = weights.transpose() @ neighborPoints
-
-    return averageTerm / weights.sum()
+    skeletonData["Coords"][changing] = tlsAverage[changing] + mu[changing,np.newaxis] * repulsion[changing]
 
 
 def filterCloseDataPoints(skeletonData: npt.NDArray,
@@ -188,8 +113,7 @@ def filterCloseDataPoints(skeletonData: npt.NDArray,
 
 
 def computeSmoothDirectionalDegrees(skeletonData: npt.NDArray,
-                                    kNeighbors: int
-                                    ) -> npt.NDArray:
+                                    kNeighbors: int):
     skeletonLookUp = KDTree(skeletonData["Coords"])
     notFix = ~skeletonData["isFix"] # (n)
     notFixIndices = np.flatnonzero(notFix)
