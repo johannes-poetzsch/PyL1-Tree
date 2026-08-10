@@ -83,8 +83,11 @@ class UnconnectedComponent(Component):
             firstStart = 1 - nonEndPointIndices[0] % 2
         else:
             parentSegments = UnconnectedComponent.getBranchSegments(branch.parent)
-            parentEndsInSegment = parentSegments[-1][1] == len(branch.parent) - 1
-            firstStart = 1 if parentEndsInSegment else 0
+            if len(parentSegments) == 0:
+                firstStart = 0
+            else:
+                parentEndsInSegment = parentSegments[-1][1] == len(branch.parent) - 1
+                firstStart = 1 if parentEndsInSegment else 0
 
         segments = [(endPointIndices[i], endPointIndices[i+1]) for i in range(firstStart, len(endPointIndices)-1, 2)]
         return segments

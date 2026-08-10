@@ -236,8 +236,10 @@ def pruneUncenteredBranches(branches: List[Branch]) -> List[Branch]:
 
         oldCoords = branch.skeletonPoints[0] + tlsPoints - pedalPoints
         newCoords = (oldCoords - branch.skeletonPoints[0]) @ np.linalg.inv(coordinateTransformation)
-        radialDirections = normalizeVectors(newCoords[:,:2])
+        if len(newCoords) <= 1:
+            continue
 
+        radialDirections = normalizeVectors(newCoords[:,:2])
         angles = np.rad2deg(np.acos(radialDirections[:,0]))
         isReflexAngle = radialDirections[:,1] < 0.0
         angles[isReflexAngle] = 360 - angles[isReflexAngle]

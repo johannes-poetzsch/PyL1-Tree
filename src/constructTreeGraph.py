@@ -62,7 +62,8 @@ def addBasePoint(trunk: Branch, basePoint: npt.NDArray[np.double], unassignedTls
     if np.rad2deg(baseAngle) < 90:
         trunk.skeletonPoints = np.insert(trunk.skeletonPoints, 0, basePoint, axis=0)
         trunk.updateSkeletonMeasurements()
-        unassignedTlsPoints = Branch.assignLocalPoints(unassignedTlsPoints, [trunk], useTrimming=True)
+        unassignedTlsPoints = Branch.assignLocalPoints(unassignedTlsPoints, list(breadthFirstSearch(trunk)),
+                                                       [trunk], useTrimming=True)
 
     return unassignedTlsPoints
 

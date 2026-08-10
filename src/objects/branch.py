@@ -22,6 +22,7 @@ class Branch(BoundedObject):
         self.id = next(Branch.idGenerator)
         self.isFlipped = False
         self.skeletonPoints = skeletonPoints
+        self.trackEndPoints = False
         self.endPointIndices: Optional[List[int]] = None
         self.temporaryIndices: Optional[List[int]] = None
         self.tlsPoints = np.empty([0,3], dtype=np.double) if tlsPoints is None else tlsPoints
@@ -70,6 +71,7 @@ class Branch(BoundedObject):
 
 
     def addEndPoints(self, endPointIndices: Iterable[int]):
+        self.trackEndPoints = True
         if self.endPointIndices is None:
             self.endPointIndices = [0, len(self.skeletonPoints) - 1]
         self.endPointIndices += list(endPointIndices)
@@ -124,32 +126,13 @@ class Branch(BoundedObject):
         return stripPointsDistances(self.skeletonPoints, points, trimStart, trimEnd, returnTrimming)
 
 
-    def getSegmentDistances(self, points: npt.NDArray[np.double]) -> npt.NDArray[np.double]:
-        xp = cp.get_array_module(points)
-        skeletonPoints = xp.asarray(self.skeletonPoints)
-        segmentDistances = linesPointsDistances(skeletonPoints[:-1], skeletonPoints[1:], points)
-        return segmentDistances
-
-
-    def getPartDistances(self, points: npt.NDArray[np.double]) -> Tuple[npt.NDArray[np.double], npt.NDArray[np.double]]:
-        xp = cp.get_array_module(points)
-        segmentDistances = self.getSegmentDistances(points)
-        firstSegmentDistances = segmentDistances[0]
-        if len(segmentDistances) > 1:
-            restBranchDistances = xp.min(segmentDistances[1:], axis=0)
-        else:
-            restBranchDistances = xp.full(segmentDistances.shape[1], xp.inf, dtype=xp.double)
-
-        return firstSegmentDistances, restBranchDistances
-
-
     def interpolate(self, resolution: float, temporary: bool = False):
         interpolation, interpolationIndices = self.getInterpolation(resolution)
         _, originalIndices = np.unique(interpolationIndices, return_index=True)
 
         self.skeletonPoints = interpolation
 
-        if self.endPointIndices is not None:
+        if self.trackEndPoints and self.endPointIndices is not None:
             self.endPointIndices = originalIndices[self.endPointIndices]
 
         if temporary:
@@ -162,7 +145,7 @@ class Branch(BoundedObject):
         originalIndices = [idx for idx in range(len(self.skeletonPoints)) if idx not in self.temporaryIndices]
         self.skeletonPoints = self.skeletonPoints[originalIndices]
 
-        if self.endPointIndices is not None:
+        if self.trackEndPoints and self.endPointIndices is not None:
             self.endPointIndices = [newIdx for newIdx, idx in enumerate(originalIndices) if self.isEndPoint(idx)]
 
         self.temporaryIndices = None
@@ -189,10 +172,11 @@ class Branch(BoundedObject):
         self.skeletonPoints = np.append(self.skeletonPoints, removedChild.skeletonPoints[1:], axis=0)
         self.updateSkeletonMeasurements()
 
-        self.addEndPoints([originalPointCount-1])
-        if removedChild.endPointIndices is not None:
-            self.addEndPoints([len(self.skeletonPoints)-1 + idx for idx in removedChild.endPointIndices
-                               if idx not in [0, len(removedChild.skeletonPoints) - 1]])
+        if self.trackEndPoints:
+            self.addEndPoints([originalPointCount-1])
+            if removedChild.endPointIndices is not None:
+                self.addEndPoints([len(self.skeletonPoints)-1 + idx for idx in removedChild.endPointIndices
+                                   if idx not in [0, len(removedChild.skeletonPoints) - 1]])
         if removedChild.temporaryIndices is not None:
             if self.temporaryIndices is None:
                 self.temporaryIndices = []
@@ -226,7 +210,7 @@ class Branch(BoundedObject):
                 child.setParent(newParent)
 
         self.skeletonPoints = np.flipud(self.skeletonPoints)
-        if self.endPointIndices is not None:
+        if self.trackEndPoints and self.endPointIndices is not None:
             self.endPointIndices = [len(self.skeletonPoints)-1 - idx for idx in self.endPointIndices]
         if self.temporaryIndices is not None:
             self.temporaryIndices = [len(self.temporaryIndices) - 1 - idx for idx in self.temporaryIndices]
@@ -237,7 +221,7 @@ class Branch(BoundedObject):
 
 
     # returns branch that ends at splitIdx.
-    def split(self, splitIdx: int | np.intp) -> Tuple[Branch, Optional[Branch]]:
+    def split(self, splitIdx: int | np.intp) -> Tuple[Optional[Branch], Optional[Branch]]:
         splitIdx = splitIdx % len(self.skeletonPoints)
 
         if splitIdx == 0:
@@ -254,7 +238,7 @@ class Branch(BoundedObject):
         if len(self.tlsPoints) > 0:
             Branch.reassignPoints([self, splitEnd], affectedBranches=[self])
 
-        if self.endPointIndices is not None:
+        if self.trackEndPoints and self.endPointIndices is not None:
             endPointIndices = self.endPointIndices
             self.endPointIndices = None
             for idx in [i for i in endPointIndices if i not in [0, splitIdx, len(self.skeletonPoints) - 1]]:
@@ -454,4 +438,7 @@ class Branch(BoundedObject):
         if unassignedTlsPoints is not None:
             prunedTlsPoints.append(Branch.assignAllPoints(unassignedTlsPoints, branches, useTrimming=True))
 
-        return np.concatenate(prunedTlsPoints, axis=0)
+        if len(prunedTlsPoints) > 0:
+            return np.concatenate(prunedTlsPoints, axis=0)
+        else:
+            return np.empty((0,3), dtype=np.double)

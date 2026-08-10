@@ -36,6 +36,8 @@ class TlsPointManager:
         unassignedPoints = []
         branches = [b for b in self.branches if not b.isRemoved]
         for branch in branches:
+            branch.endPointIndices = None
+            branch.trackEndPoints = False
             unassignedPoints.append(Branch.assignLocalPoints(self.assignedPoints[self.branchPointIds[branch]],
                                                              [branch], useTrimming=True))
 
@@ -61,6 +63,7 @@ class TlsPointManager:
                      resolution: float
                      ) -> Branch:
         branch = Branch(skeletonPoints, parent=parent)
+        Branch.trackEndPoints = True
         self.addBranch(branch)
         branchId = self.branchIds[branch]
 
@@ -169,9 +172,14 @@ class TlsPointManager:
         maximumDistances = [distances[i].max() for i in localIndices if len(i) > 0]
         if len(maximumDistances) == 0:
             return np.empty(0, dtype=np.intp)
-        else:
-            localMaxDistance = max(maximumDistances)
-            searchRange = np.sqrt(localMaxDistance ** 2 + (maxSegmentLength / 2) ** 2)
-            indices = lookUp.query_ball_point(strip, searchRange)
-            indices = np.unique(np.concatenate([i for i in indices if len(i) > 0]))
-            return indices
+
+        localMaxDistance = max(maximumDistances)
+        searchRange = np.sqrt(localMaxDistance ** 2 + (maxSegmentLength / 2) ** 2)
+
+        indices = lookUp.query_ball_point(strip, searchRange)
+        indices = [i for i in indices if len(i) > 0]
+        if len(indices) == 0:
+            return np.empty(0, dtype=np.intp)
+
+        indices = np.unique(np.concatenate(indices))
+        return indices

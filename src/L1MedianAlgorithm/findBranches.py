@@ -9,9 +9,9 @@ from ..objects.branch import Branch
 
 def findNewBranches(skeletonData: npt.NDArray,
                     kNeighbors: int,
-                    distanceTracingThreshold: np.double,
-                    angleTracingThreshold: np.double,
-                    sigmaTracingThreshold: np.double,
+                    distanceThreshold: np.double,
+                    angleThreshold: np.double,
+                    sigmaThreshold: np.double,
                     branchSizeThreshold: int
                     ) -> List[Branch]:
     skeletonLookUp = KDTree(skeletonData["Coords"])
@@ -38,9 +38,9 @@ def findNewBranches(skeletonData: npt.NDArray,
         secondIdx = startNeighbors[neighborsAreValid][0]
         searchDirection = normalizeVectors(skeletonData["Coords"][secondIdx] - skeletonData["Coords"][startIdx])
         newBranchForward = extendBranchInDirection(startIdx, searchDirection, skeletonData, neighbors,
-                                                   distanceTracingThreshold, angleTracingThreshold)
+                                                   distanceThreshold, angleThreshold)
         newBranchBackward = extendBranchInDirection(startIdx, -searchDirection, skeletonData, neighbors,
-                                                    distanceTracingThreshold, angleTracingThreshold)
+                                                    distanceThreshold, angleThreshold)
         newBranchBackward.reverse()
         newBranch = newBranchBackward[:-1] + newBranchForward
 
@@ -49,10 +49,10 @@ def findNewBranches(skeletonData: npt.NDArray,
             continue
 
         newBranch = extendBranchFromTail(newBranch, skeletonData, neighbors,
-                                         distanceTracingThreshold, angleTracingThreshold, sigmaTracingThreshold)
+                                         distanceThreshold, angleThreshold, sigmaThreshold)
         newBranch.reverse()
         newBranch = extendBranchFromTail(newBranch, skeletonData, neighbors,
-                                         distanceTracingThreshold, angleTracingThreshold, sigmaTracingThreshold)
+                                         distanceThreshold, angleThreshold, sigmaThreshold)
         newBranch.reverse()
         newBranch = np.array(newBranch)
 
@@ -68,8 +68,8 @@ def extendBranchInDirection(startIdx: np.intp,
                             searchDirection: npt.NDArray[np.double],
                             skeletonData: npt.NDArray,
                             neighbors: npt.NDArray[np.intp],
-                            distanceTracingThreshold: np.double,
-                            angleTracingThreshold: np.double
+                            maxDistanceThreshold: np.double,
+                            maxAngleThreshold: np.double
                             ) -> List[np.intp]:
     currentIdx = startIdx
     branch = [startIdx]
@@ -83,7 +83,7 @@ def extendBranchInDirection(startIdx: np.intp,
                 continue
             neighborPoint = skeletonData["Coords"][neighbor]
             distance = np.linalg.norm(neighborPoint - currentPoint)
-            if distance > distanceTracingThreshold:
+            if distance > maxDistanceThreshold:
                 continue
             projectedDistance = (neighborPoint - currentPoint) @ searchDirection
             if projectedDistance >= 0:
@@ -97,7 +97,7 @@ def extendBranchInDirection(startIdx: np.intp,
         newDirection = normalizeVectors(nextPoint - currentPoint)
         searchAngle = angle(newDirection, searchDirection)
 
-        if searchAngle > angleTracingThreshold or ~skeletonData["isFix"][nextIdx] or skeletonData["isBranch"][nextIdx]:
+        if searchAngle > maxAngleThreshold or ~skeletonData["isFix"][nextIdx] or skeletonData["isBranch"][nextIdx]:
             break
         else:
             branch.append(nextIdx)

@@ -150,7 +150,7 @@ def test_generate_potential_connections(potential_connection_edges, branches, un
 
     # sort edge points so that the edge orientation does not matter
     edges, expected_edges = [np.sort(e, axis=0) for e in edges], [np.sort(e, axis=0) for e in potential_connection_edges]
-
+    # TODO: fix this test
     edges, expected_edges = np.sort(np.stack(edges), axis=0), np.sort(np.stack(expected_edges), axis=0)
 
     # expected edges might appear multiple times in edges

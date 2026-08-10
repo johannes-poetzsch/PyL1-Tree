@@ -24,9 +24,9 @@ def generateSeeds(tlsPoints: npt.NDArray[np.double], # must be sorted by height 
     if parameters["searchRange"] is None: parameters["searchRange"] = baseRadius * 0.1
 
     tlsPoints, seedIndices, relPathPositions = generateInitialSeeds(tlsPoints,
-                                                                     parameters["baseRadius"],
-                                                                     parameters["initialSearchRange"],
-                                                                     basePointIndex=basePointIndex)
+                                                                    parameters["baseRadius"],
+                                                                    parameters["initialSearchRange"],
+                                                                    basePointIndex=basePointIndex)
 
     seedIndices = filterSeeds(tlsPoints, seedIndices, parameters["nearThreshold"])
     seedPoints = tlsPoints[seedIndices]
@@ -131,9 +131,9 @@ def removeUnconnectedComponents(tlsPoints: npt.NDArray[np.double],
     isConnected = componentLabels == componentLabels[basePointIndex]
     tlsPoints = tlsPoints[isConnected]
 
-    newBasePointIdx = np.flatnonzero(np.flatnonzero(isConnected) == basePointIndex)
+    newBasePointIdx = np.flatnonzero(np.flatnonzero(isConnected) == basePointIndex)[0]
 
-    return tlsPoints, int(newBasePointIdx)
+    return tlsPoints, newBasePointIdx
 
 
 def getPathData(neighborGraph: csr_array,
