@@ -64,10 +64,10 @@ def calculateDirectionalDegree(neighborVectors: npt.NDArray[np.double],
         weights = decayingWeights(neighborDistances, 2. * searchRange)
     else:
         weights = np.ones(1, dtype=np.double)
-    c = np.matmul(np.matrix_transpose(neighborVectors * weights[:,np.newaxis]), neighborVectors)
-    eigenValues, _ = np.linalg.eig(c)
-
-    sigma = eigenValues.max(axis=-1) / eigenValues.sum(axis=-1)
+    
+    c = neighborVectors.T @ (neighborVectors * weights[:, None])
+    eigenValues = np.linalg.eigvalsh(c)
+    sigma = eigenValues[-1] / eigenValues.sum()
     return sigma
 
 

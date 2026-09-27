@@ -228,30 +228,30 @@ def pruneUncenteredBranches(branches: List[Branch]) -> List[Branch]:
 
         branchDirection = normalizeVectors(branch.skeletonPoints[-1] - branch.skeletonPoints[0])
 
-        coordinateTransformation = np.empty([3,3], dtype=np.double)
-        coordinateTransformation[2] = branchDirection
-        coordinateTransformation[0] = normalizeVectors(tlsPoints[0] - pedalPoints[0])
-        coordinateTransformation[1] = normalizeVectors(np.cross(coordinateTransformation[0],
-                                                                coordinateTransformation[2]))
+        branchLocalBasis = np.empty([3,3], dtype=np.double)
+        branchLocalBasis[2] = branchDirection
+        branchLocalBasis[0] = normalizeVectors(tlsPoints[0] - pedalPoints[0])
+        branchLocalBasis[1] = normalizeVectors(np.cross(branchLocalBasis[0], branchLocalBasis[2]))
 
-        oldCoords = branch.skeletonPoints[0] + tlsPoints - pedalPoints
-        newCoords = (oldCoords - branch.skeletonPoints[0]) @ np.linalg.inv(coordinateTransformation)
-        if len(newCoords) <= 1:
+        pointOffsetsInWorldSpace = branch.skeletonPoints[0] + tlsPoints - pedalPoints
+        pointOffsetsInBranchFrame = (pointOffsetsInWorldSpace - branch.skeletonPoints[0]) @ np.linalg.inv(branchLocalBasis)
+        if len(pointOffsetsInBranchFrame) <= 1:
             continue
 
-        radialDirections = normalizeVectors(newCoords[:,:2])
-        angles = np.rad2deg(np.acos(radialDirections[:,0]))
-        isReflexAngle = radialDirections[:,1] < 0.0
-        angles[isReflexAngle] = 360 - angles[isReflexAngle]
+        lateralDirections = normalizeVectors(pointOffsetsInBranchFrame[:,:2])
+        azimuthAngles = np.rad2deg(np.acos(lateralDirections[:,0]))
+        past180Degrees = lateralDirections[:,1] < 0.0
+        azimuthAngles[past180Degrees] = 360 - azimuthAngles[past180Degrees]
 
-        angles.sort()
+        azimuthAngles.sort()
 
-        angleDiff = angles - np.roll(angles, 1)
-        angleDiff[0] += 360
+        angularGaps = azimuthAngles - np.roll(azimuthAngles, 1)
+        angularGaps[0] += 360
 
-        angleDiff[::-1].sort() # sort in descending order
+        angularGaps[::-1].sort() # sort in descending order
 
-        if angleDiff[1] * np.sqrt(len(angles)) > 720:
+        # the more points there are, the smaller the expected gaps
+        if angularGaps[1] > max(3, 720 / np.sqrt(len(azimuthAngles))):
             branch.remove()
             prunedBranches.append(branch)
 

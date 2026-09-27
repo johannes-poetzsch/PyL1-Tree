@@ -7,7 +7,7 @@ from scipy.spatial import KDTree
 from typing import Iterable, List, Optional, Tuple
 
 from src.objects.boundedObject import BoundedObject
-from src.utils.geometry import getStripAngles, getValueOccurrences, linesPointsDistances, stripPointsDistances
+from src.utils.geometry import getStripAngles, getValueOccurrences, stripPointsDistances
 
 
 class Branch(BoundedObject):
@@ -107,7 +107,7 @@ class Branch(BoundedObject):
 
         interpolation = np.concat([
             np.linspace(self.skeletonPoints[i], self.skeletonPoints[i+1], sampleCounts[i], endpoint=False) for i in range(len(sampleCounts))]
-            + [self.skeletonPoints[-1].reshape(1,3)], 
+            + [self.skeletonPoints[-1].reshape(1,3)],
             axis=0)
         return interpolation, indices
 
@@ -259,7 +259,7 @@ class Branch(BoundedObject):
     @staticmethod
     def assignAllPoints(points: npt.NDArray[np.double],
                         branches: List[Branch],
-                        useTrimming=False) -> npt.NDArray[np.double]:
+                        useTrimming = False) -> npt.NDArray[np.double]:
         closeBranchIndices = Branch.findCloseBranches(points, branches)
         unassignedPoints = []
         for branchIdx, indices in getValueOccurrences(closeBranchIndices):
@@ -332,16 +332,21 @@ class Branch(BoundedObject):
 
         maxDistance = distances.max()
 
-        for idx in branchIndices:
-            branch = branches[idx]
+        for branchIdx in branchIndices:
+            branch = branches[branchIdx]
             if branch.getBoundingBoxDistance(pointsMin, pointsMax) >= maxDistance:
                 continue
 
+            isAtBranch = branch.getPointsBBDistance(points) < distances
+            newDistances = distances.copy()
+            trimmed = np.zeros(len(points), dtype=bool)
+
             if useTrimming:
-                newDistances, trimmed = branch.getDistances(points, trimStart=branch.isStem(), trimEnd=branch.isLeaf(),
-                                                            returnTrimming=True)
+                newDistances[isAtBranch], trimmed[isAtBranch] = branch.getDistances(
+                    points[isAtBranch], trimStart=branch.isStem(), trimEnd=branch.isLeaf(), returnTrimming=True)
             else:
-                newDistances = branch.getDistances(points)
+                newDistances[isAtBranch] = branch.getDistances(points[isAtBranch])
+
             improved = newDistances < distances
 
             if xp.count_nonzero(improved) > 0:
@@ -351,7 +356,7 @@ class Branch(BoundedObject):
                 if branch.isRemoved:
                     closest[improved] = -1
                 else:
-                    closest[improved] = idx
+                    closest[improved] = branchIdx
                     if useTrimming:
                         closest[improved & trimmed] = -1
 

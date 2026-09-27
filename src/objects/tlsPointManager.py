@@ -1,9 +1,11 @@
 import numpy as np
 import numpy.typing as npt
+from cupyx.scipy.spatial import distance
 from scipy.spatial import KDTree
 from typing import List, Optional, Tuple
 
 from src.objects.branch import Branch
+from utils.geometry import queryPointsNearSegment
 
 
 class TlsPointManager:
@@ -163,23 +165,15 @@ class TlsPointManager:
     def findPointIndicesAroundStrip(strip: npt.NDArray[np.double],
                                     lookUp: KDTree,
                                     distances: npt.NDArray[np.double],
-                                    maxDistance: Optional[float] = None
+                                    maxDistance: float
                                     ) -> npt.NDArray[np.intp]:
-        maxSegmentLength = np.linalg.norm(strip[1:] - strip[:-1], axis=1).max()
-        searchRange = np.sqrt(maxDistance ** 2 + (maxSegmentLength / 2) ** 2)
-        localIndices = lookUp.query_ball_point(strip, searchRange)
+        stripSegments = np.stack([strip[:-1], strip[1:]], axis=1)
 
-        maximumDistances = [distances[i].max() for i in localIndices if len(i) > 0]
-        if len(maximumDistances) == 0:
+        localIndices = [queryPointsNearSegment(lookUp, s[0], s[1], maxDistance) for s in stripSegments]
+        if np.all([len(i) == 0 for i in localIndices]):
             return np.empty(0, dtype=np.intp)
 
-        localMaxDistance = max(maximumDistances)
-        searchRange = np.sqrt(localMaxDistance ** 2 + (maxSegmentLength / 2) ** 2)
-
-        indices = lookUp.query_ball_point(strip, searchRange)
-        indices = [i for i in indices if len(i) > 0]
-        if len(indices) == 0:
-            return np.empty(0, dtype=np.intp)
-
-        indices = np.unique(np.concatenate(indices))
+        localMaxDistance = np.max([distances[i].max(initial=0.0) for i in localIndices])
+        indices = np.unique(np.concatenate(
+            [queryPointsNearSegment(lookUp, s[0], s[1], localMaxDistance) for s in stripSegments], axis=0))
         return indices

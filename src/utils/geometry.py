@@ -117,6 +117,30 @@ def normalizeVectors(vectors: npt.NDArray):
     return vectors / xp.expand_dims(xp.linalg.norm(vectors, axis=-1), axis=-1)
 
 
+def queryPointsNearSegment(lookUp: KDTree,
+                           startPoint: npt.NDArray[np.double],
+                           endPoint: npt.NDArray[np.double],
+                           range: float,
+                           spacing: Optional[float] = None
+                           ) -> npt.NDArray[np.double]:
+    segmentVector = endPoint - startPoint
+    segmentLength = np.linalg.norm(segmentVector)
+
+    # default spacing: 2r (tune down for fewer false positives)
+    if spacing is None:
+        spacing = 2 * range
+    spacing = min(spacing, max(segmentLength, 1e-9))  # don't exceed segment length
+
+    numIntervals = max(1, int(np.ceil(segmentLength / spacing)))
+    t = np.linspace(0.0, 1.0, numIntervals + 1)
+    samples = startPoint + t[:, None] * (segmentVector)
+
+    actualSpacing = segmentLength / numIntervals
+    queryRadius = np.sqrt(range ** 2 + (actualSpacing / 2) ** 2)
+
+    return np.concatenate(lookUp.query_ball_point(samples, queryRadius), axis=0)
+
+
 def pointSort(points: npt.NDArray,
               order: Tuple[Literal['x', 'y', 'z'], Literal['x', 'y', 'z'], Literal['x', 'y', 'z']] = ('x', 'y', 'z')
               ) -> npt.NDArray:
@@ -202,3 +226,18 @@ def stripPointsDistances(strip: npt.NDArray,  # (L+1,D)
             return distances, trimmed
         else:
             return distances[~trimmed]
+
+
+def skewLinesDistance(a1: npt.NDArray[np.double], b1: npt.NDArray[np.double], # 2 points on first line
+                      a2: npt.NDArray[np.double], b2: npt.NDArray[np.double] # 2 points on second line
+                      ) -> float: # lines are defined by 2 points (a, b) on the line
+    line1Vector = a2 - a1
+    line2Vector = b2 - b1
+    normalVector = np.cross(line1Vector, line2Vector)
+    connectionVector = a2 - a1
+
+    normalLength = np.linalg.norm(normalVector)
+    if np.isclose(normalLength, 0): # vectors are parallel
+        return np.linalg.norm(np.cross(connectionVector, line1Vector)) / np.linalg.norm(line1Vector)
+    else:
+        return np.abs(np.dot(connectionVector, normalVector)) / normalLength

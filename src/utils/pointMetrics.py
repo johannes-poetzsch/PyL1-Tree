@@ -32,8 +32,11 @@ def calculateDensity(points: Optional[npt.NDArray[np.double]],
     global _tlsLookUp, _searchRange
     _tlsLookUp, _searchRange = tlsLookUp, searchRange
 
-    with Pool(processes=workers) as pool:
-        densities = pool.map(calculateADensity, points, chunksize=64)
+    if workers > 1:
+        with Pool(processes=workers) as pool:
+            densities = pool.map(calculateADensity, points, chunksize=64)
+    else:
+        densities = list(map(calculateADensity, points))
     densities = np.asarray(densities, dtype=np.double)
 
     return densities
@@ -42,5 +45,5 @@ def calculateDensity(points: Optional[npt.NDArray[np.double]],
 def decayingWeights(neighborDistances: npt.NDArray[np.double],
                     searchRange: float
                     ) -> npt.NDArray[np.double]:
-    # equivalent to the formula  e^{-||x_i, p_j||^2 / (r/2)^2
+    # equivalent to the formula  e^{-||x_i, p_j||^2 / (r/2)^2}
     return np.exp(-np.square((2/searchRange) * neighborDistances))
