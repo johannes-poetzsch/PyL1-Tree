@@ -16,6 +16,8 @@ from src.filterBranches import filterByLength, filterTreeBranches
 from src.L1MedianAlgorithm.generateSeeds import generateSeeds
 from src.L1MedianAlgorithm.generateBranches import generateBranches
 from src.smoothBranches import cleanUpBranches, smoothBranches
+from src.utils.iteration import breadthFirstSearch
+from src.utils.voxelDownsampling import voxelDownsampling
 
 
 def main():
@@ -44,6 +46,7 @@ def main():
     outputFile = path.join(args.outputDirectory, fileName)
     np.save(outputFile, cylinders)
     print("saved cylinders to {}".format(outputFile))
+    print()
 
 
 def hasIndexColumn(file, delimiter):
@@ -80,19 +83,23 @@ def createQSM(tlsPoints: npt.NDArray[np.double],
 
     start_time = time.time()
 
+    tlsPoints, _, _ = voxelDownsampling(tlsPoints, 0.002)
+
+    print("original point count:", len(tlsPoints))
     print(f"generating seeds (starting after {time.time()-start_time} s)")
-    seedPoints, relPathPositions, tlsPoints = generateSeeds(tlsPoints, parameters)
+    seedPoints, relPathPositions, tlsPoints = generateSeeds(tlsPoints, parameters, useStumpRemoval=True, useRansac=False)
+    print("base radius:", parameters["baseRadius"])
+    print("remaining point count:", len(tlsPoints))
 
     print(f"generating branches (starting after {time.time()-start_time} s)")
     branches, unfixedPoints = generateBranches(tlsPoints, seedPoints, relPathPositions, parameters, workers)
+    print("number of initial branches:", len(branches))
 
     print(f"constructing initial tree graph (starting after {time.time()-start_time} s)")
     trunk, prunedTlsPoints1 = constructTreeGraph(tlsPoints, branches, unfixedPoints, parameters)
-    print("Number of initial Branches:", len(branches))
     print("Number of Pruned TlsPoints:", len(prunedTlsPoints1))
-    if len(prunedTlsPoints1) > len(tlsPoints) / 2:
-        print("Aborting due to high number unconnected tree parts")
-        return None
+    print("Number of connected branches:", len(list(breadthFirstSearch(trunk))))
+    print("max Height:", max(np.concatenate([b.skeletonPoints[:,2] for b in breadthFirstSearch(trunk)], axis=0)))
 
     print(f"adjusting bifurcations (starting after {time.time()-start_time} s)")
     adjustBifurcations(trunk, parameters)
@@ -101,6 +108,8 @@ def createQSM(tlsPoints: npt.NDArray[np.double],
 
     print(f"smoothing branches (starting after {time.time()-start_time} s)")
     unassignedTlsPoints = smoothBranches(trunk, tlsPoints, prunedTlsPoints, parameters, workers)
+
+    #if len(unassignedTlsPoints) < len(tlsPoints) / 2:
     print(f"extending skeleton (starting after {time.time()-start_time} s)")
     extendSkeleton(trunk, unassignedTlsPoints, parameters)
 
@@ -108,6 +117,8 @@ def createQSM(tlsPoints: npt.NDArray[np.double],
     adjustBifurcations(trunk, parameters)
     filterByLength(trunk, parameters["branchSizeThreshold"], parameters["resolution"])
     cleanUpBranches(trunk, unassignedTlsPoints)
+    #else:
+    #    warnings.warn("Most of the point cloud could not be modeled.")
 
     print(f"constructing tree model (starting after {time.time()-start_time} s)")
     cylinders = constructTreeModel(trunk)

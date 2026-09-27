@@ -3,13 +3,14 @@ import networkx as nx
 import numpy as np
 import numpy.typing as npt
 from scipy.spatial import KDTree
-from typing import List, Optional, Set, Tuple
+from typing import Iterable, List, Optional, Set, Tuple
 
 from src.objects.branch import Branch
 from src.objects.connectedComponent import ConnectedComponent
 from src.objects.unconnectedComponent import UnconnectedComponent
 from src.objects.connection import Connection
 from src.objects.tlsPointManager import TlsPointManager
+from src.utils.geometry import angle, normalizeVectors
 from src.utils.iteration import breadthFirstSearch
 
 
@@ -55,21 +56,27 @@ def connectComponents(trunk: Branch,
                 component.checkedDistanceThreshold = maxDistanceThreshold
 
         connectableComponents = [c for c in unconnectedComponents if len(c.connections) > 0]
-
         if len(connectableComponents) > 0:
-            connectionBranch, splitEnd = connectComponent(max(connectableComponents, key=lambda c: c.connections[0].score),
-                                                          unconnectedComponents, connectedComponents, tlsManager,
-                                                          resolution)
-
-            updatePotentialConnections(potentialConnections, unfixedLookUp, unfixedWrapper, connectionBranch, splitEnd,
-                                       minDistanceThreshold)
-
-            maxDistanceThreshold = originalMaxDistanceThreshold
+            connectionComponent = max(connectableComponents, key=lambda c: c.connections[0].score)
         else:
-            if (maxDistanceThreshold + 0.2 > maxConnectionLength
-                    or len(unconnectedComponents) <= originalComponentCount / 10):
+            if len(unconnectedComponents) <= originalComponentCount / 10:
                 break
-            maxDistanceThreshold += 0.2
+            elif maxDistanceThreshold + 0.2 <= maxConnectionLength:
+                maxDistanceThreshold += 0.2
+                continue
+            else:
+                connectionComponent = findContinuation(connectedComponents, unconnectedComponents, tlsManager,
+                                                       maxConnectionLength)
+                if connectionComponent is None:
+                    break
+
+        connectionBranch, splitEnd = connectComponent(connectionComponent, unconnectedComponents, connectedComponents,
+                                                      tlsManager, resolution)
+
+        updatePotentialConnections(potentialConnections, unfixedLookUp, unfixedWrapper, connectionBranch, splitEnd,
+                                   minDistanceThreshold)
+
+        maxDistanceThreshold = originalMaxDistanceThreshold
 
     trimmedPoints = tlsManager.releasePoints()
     for branch in reversed(list(breadthFirstSearch(trunk))):
@@ -161,6 +168,65 @@ def findConnections(connectedComponent: ConnectedComponent,
     unconnectedComponent.connections.sort(key=lambda c: c.score, reverse=True)
 
 
+def findContinuation(connectedComponents: Iterable[ConnectedComponent],
+                     unconnectedComponents: Iterable[UnconnectedComponent],
+                     tlsManager: TlsPointManager,
+                     maxConnectionLength: float,
+                     maxAngleThreshold: float = np.deg2rad(20)
+                     ) -> Optional[UnconnectedComponent]:
+    cBranches = list(chain.from_iterable([c.branches for c in connectedComponents]))
+    cTerminalBranches = [b for b in cBranches if b.isLeaf()]
+    # sort by descending radius
+    def getRadius(branch: Branch) -> float:
+        distances = tlsManager.getDistances(branch)
+        return 0 if len(distances) == 0 else distances.mean()
+    cRadii = {b: getRadius(b) for b in cTerminalBranches}
+    cTerminalBranches.sort(key=lambda b: cRadii[b], reverse=True)
+
+    ucBranches = list(chain.from_iterable([c.branches for c in unconnectedComponents]))
+    ucLeaves = [b for b in ucBranches if b.isLeaf()]
+    ucStems = [b for b in ucBranches if b.isStem()]
+    ucTerminalBranches = ucLeaves + ucStems
+    isLeaf = np.array([True, False]).repeat([len(ucLeaves), len(ucStems)])
+
+    ucTerminalPoints = np.array([b[-1] for b in ucLeaves] + [b[0] for b in ucStems])
+    ucTerminalLookUp = KDTree(ucTerminalPoints)
+
+    for cBranch in cTerminalBranches:
+        indices = np.array(ucTerminalLookUp.query_ball_point(cBranch[-1], maxConnectionLength))
+        if len(indices) == 0:
+            continue
+        distances = np.linalg.norm(ucTerminalPoints[indices] - cBranch[-1], axis=-1)
+        #order = np.flip(np.argsort([ucRadii[ucTerminalBranches[idx]] for idx in indices]))
+        order = np.argsort(distances)
+
+        for idx, d in zip(indices[order], distances[order]):
+            ucBranch = ucTerminalBranches[idx]
+            ucStartPoint = ucTerminalPoints[idx]
+
+            cDirection = normalizeVectors(cBranch[-1] - cBranch[0])
+            ucDirection = normalizeVectors(ucBranch[0] - ucBranch[-1] if isLeaf[idx] else ucBranch[-1] - ucBranch[0])
+
+            if angle(cDirection, ucDirection) > maxAngleThreshold:
+                continue
+
+            connectionDirection = ucStartPoint - cBranch[-1]
+            if (angle(connectionDirection, cDirection) > maxAngleThreshold
+                    or angle(connectionDirection, ucDirection) > maxAngleThreshold):
+                continue
+
+            startComponent = [c for c in connectedComponents if cBranch in c.branches][0]
+            endComponent = [uc for uc in unconnectedComponents if ucBranch in uc.branches][0]
+            connection = Connection(np.array([cBranch[-1], ucStartPoint]), tlsManager,
+                                    cBranch, len(cBranch) - 1, startComponent, ucBranch, len(ucBranch) - 1 if isLeaf[idx] else 0,
+                                    cDirection, np.array([], dtype=np.double), maxConnectionLength, 0.0, 0.0, 1.0, 1.0)
+
+            # use connection regardless of usual credibility
+            endComponent.connections.append(connection)
+            return endComponent
+    return None
+
+
 def generatePotentialConnections(branches: List[Branch],
                                  unfixedLookUp: KDTree,
                                  unfixedWrapper: Branch,
@@ -207,4 +273,4 @@ def updatePotentialConnections(potentialConnections: nx.Graph,
         potentialConnections.add_node(duplicateNode)
         potentialConnections.add_weighted_edges_from([(duplicateNode, v, d) for u,v,d in
                                                      potentialConnections.edges(sharedNode, data="distance")],
-                                                    weight="distance")
+                                                     weight="distance")

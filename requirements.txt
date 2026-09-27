@@ -1,0 +1,11 @@
+cupy
+cutensor
+kneed
+matplotlib
+networkx
+pytest
+scikit-learn
+scipy
+yaml
+
+circle_detection
