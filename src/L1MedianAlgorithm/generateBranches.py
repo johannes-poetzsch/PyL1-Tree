@@ -24,7 +24,7 @@ def generateBranches(tlsPoints: npt.NDArray[np.double],
     maxSearchRange = 2 * parameters["baseRadius"]
 
     while searchRange <= maxSearchRange:
-        print(searchRange, " / ", maxSearchRange)
+        #print(searchRange, " / ", maxSearchRange)
         for _ in range(parameters["maxIterationNumFixedRange"]):
             recomputeSkeletonPoints(skeletonData, tlsLookUp, tlsDensities, searchRange,
                                     parameters["baseRadius"], parameters["minMu"], parameters["maxMu"], workers)
@@ -71,25 +71,44 @@ def recomputeSkeletonPoints(skeletonData: npt.NDArray,
                             workers: int = 1):
     sigma = skeletonData["Sigma"]
     changing = ~skeletonData["isFix"]
-
-    repulsion = np.zeros((len(skeletonData), 3), dtype=np.double)
-    tlsAverage = np.zeros((len(skeletonData), 3), dtype=np.double)
+    changingIndices = np.flatnonzero(changing)
 
     setIterationParameters(baseRadius, searchRange, skeletonData, tlsDensities, tlsLookUp)
-    with Pool(processes=workers) as pool:
-        for idx, c, s, r, a in pool.map(runIteration, np.flatnonzero(changing), chunksize=32):
-            changing[idx], sigma[idx] = c, s
-            if c:
-                repulsion[idx], tlsAverage[idx] = r, a
 
-    minSigma, maxSigma = sigma.min(), sigma.max()
+    if workers > 1:
+        with Pool(processes=workers) as pool:
+            results = pool.map(runIteration, changingIndices, chunksize=32)
+    else:
+        results = map(runIteration, changingIndices)
+
+    repulsion = np.zeros((len(changingIndices), 3), dtype=np.double)
+    tlsAverage = np.zeros((len(changingIndices), 3), dtype=np.double)
+    updated = np.zeros(len(changingIndices), dtype=np.bool_)
+
+    for resultIndex, (idx, canChange, pointSigma, pointRepulsion, pointAverage) in enumerate(results):
+        changing[idx] = canChange
+        sigma[idx] = pointSigma
+        if canChange:
+            updated[resultIndex] = True
+            repulsion[resultIndex] = pointRepulsion
+            tlsAverage[resultIndex] = pointAverage
+
+    minSigma = sigma.min()
+    maxSigma = sigma.max()
     sigmaRange = maxSigma - minSigma
+
     muRange = np.abs(maxMu - minMu)
-
     mu = (muRange / sigmaRange) * (sigma - minSigma) + minMu
-    changing[mu < 0] = False
 
-    skeletonData["Coords"][changing] = tlsAverage[changing] + mu[changing,np.newaxis] * repulsion[changing]
+    changing[mu < 0] = False
+    compactChanging = updated & changing[changingIndices]
+    updatedIndices = changingIndices[compactChanging]
+
+    skeletonData["Coords"][updatedIndices] = (
+            tlsAverage[compactChanging]
+            + mu[updatedIndices, np.newaxis]
+            * repulsion[compactChanging]
+    )
 
 
 def filterCloseDataPoints(skeletonData: npt.NDArray,
@@ -118,6 +137,9 @@ def computeSmoothDirectionalDegrees(skeletonData: npt.NDArray,
     notFix = ~skeletonData["isFix"] # (n)
     notFixIndices = np.flatnonzero(notFix)
 
+    if len(notFixIndices) == 0:
+        return
+
     _, neighbors = skeletonLookUp.query(skeletonData[notFix]["Coords"], kNeighbors + 1) # (nF,k+1)
     neighbors = neighbors[:,1:] # (nF,k)
 
@@ -128,16 +150,19 @@ def computeSmoothDirectionalDegrees(skeletonData: npt.NDArray,
     validNeighborsCount = np.count_nonzero(neighborIsValid, axis=1) # (nF)
 
     hasEnoughValidNeighbors = validNeighborsCount > 3 # (nF)
+    sigma = np.full(len(notFixIndices), 0.95, dtype=np.double)
 
-    for idx in range(len(notFixIndices)):
-        if not hasEnoughValidNeighbors[idx]:
-            skeletonData["Sigma"][notFixIndices[idx]] = 0.95
-            continue
+    validRows = np.flatnonzero(hasEnoughValidNeighbors)
+    if len(validRows) > 0:
+        neighborVectors = (
+            skeletonData["Coords"][neighbors[validRows]] - skeletonData["Coords"][notFixIndices[validRows], np.newaxis])
+        neighborVectors[~neighborIsValid[validRows]] = 0.0
 
-        originalIdx = notFixIndices[idx]
-        neighborVectors = (skeletonData["Coords"][neighbors[idx][neighborIsValid[idx]]]
-                           - skeletonData["Coords"][originalIdx]) # (nF,3)
-        skeletonData["Sigma"][originalIdx] = calculateDirectionalDegree(neighborVectors, useDecayingWeights=False)
+        covariance = np.einsum("mki,mkj->mij", neighborVectors, neighborVectors)
+        eigenValues = np.linalg.eigvalsh(covariance)
+        sigma[validRows] = eigenValues[:, -1] / eigenValues.sum(axis=1)
+
+    skeletonData["Sigma"][notFixIndices] = sigma
 
     invSigma = 1.0 - skeletonData["Sigma"] # (n)
 
