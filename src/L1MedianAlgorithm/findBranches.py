@@ -12,10 +12,12 @@ def findNewBranches(skeletonData: npt.NDArray,
                     distanceThreshold: np.double,
                     angleThreshold: np.double,
                     sigmaThreshold: np.double,
-                    branchSizeThreshold: int
+                    branchSizeThreshold: int,
+                    workers: int = 1
                     ) -> List[Branch]:
     skeletonLookUp = KDTree(skeletonData["Coords"])
-    neighborDistances, neighbors = skeletonLookUp.query(skeletonData["Coords"], kNeighbors + 1)
+    neighborDistances, neighbors = skeletonLookUp.query(skeletonData["Coords"], kNeighbors + 1,
+                                                        workers=workers)
     neighborDistances, neighbors = neighborDistances[:, 1:], neighbors[:, 1:]
 
     newBranches = []

@@ -1,11 +1,14 @@
-from multiprocessing import Pool
+import sys
+from multiprocessing import get_context, shared_memory
+from multiprocessing.pool import Pool
 import numpy as np
 import numpy.typing as npt
 from scipy.spatial import KDTree
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .findBranches import findNewBranches
-from .runIteration import calculateDirectionalDegree, runIteration, setIterationParameters
+from .runIteration import (MAX_QUERY_BATCH_SIZE, initializeWorker, runIteration,
+                           runIterationBatch, runIterationBatchesLocally, setIterationParameters)
 from ..objects.branch import Branch
 from ..utils.pointMetrics import calculateDensity
 
@@ -14,30 +17,100 @@ def generateBranches(tlsPoints: npt.NDArray[np.double],
                      seedPoints: npt.NDArray[np.double],
                      relPathLocations: npt.NDArray[np.double],
                      parameters: Dict[str, Any],
-                     workers: int = 1
+                     workers: int = 1,
+                     useMultiProcessing: bool = True
                      ) -> Tuple[List[Branch], npt.NDArray[np.double]]:
-    skeletonBranches: List[Branch] = []
     tlsLookUp = KDTree(tlsPoints)
     skeletonData = initializeSkeleton(seedPoints, relPathLocations)
-    tlsDensities = calculateDensity(None, tlsLookUp, 2 * parameters["initialSearchRange"], workers)
+    pool = None
+    tlsSharedMemory = None
+    skeletonSharedMemory = None
+    densitiesSharedMemory = None
+    workerSkeletonData = None
+    workerTlsDensities = None
+    if workers > 1 and useMultiProcessing:
+        skeletonSharedMemory = shared_memory.SharedMemory(create=True, size=max(1, skeletonData.nbytes))
+        densitiesSharedMemory = shared_memory.SharedMemory(create=True,
+                                                           size=max(1, tlsPoints.shape[0] * np.dtype(np.double).itemsize))
+        workerSkeletonData = np.ndarray(skeletonData.shape, dtype=skeletonData.dtype,
+                                        buffer=skeletonSharedMemory.buf)
+        workerTlsDensities = np.ndarray((tlsPoints.shape[0],), dtype=np.double,
+                                        buffer=densitiesSharedMemory.buf)
+
+        if sys.platform.startswith("linux"):
+            # Fork inherits the parent's read-only tree through copy on write.
+            initializeWorker(inheritedTree=tlsLookUp)
+            pool = get_context("fork").Pool(processes=workers, initializer=initializeWorker,
+                                            initargs=(None, None, None, skeletonSharedMemory.name,
+                                                      skeletonData.shape, skeletonData.dtype,
+                                                      densitiesSharedMemory.name, workerTlsDensities.shape,
+                                                      workerTlsDensities.dtype.str))
+        else:
+            tlsSharedMemory = shared_memory.SharedMemory(create=True, size=tlsLookUp.data.nbytes)
+            sharedTlsPoints = np.ndarray(tlsLookUp.data.shape, dtype=tlsLookUp.data.dtype,
+                                         buffer=tlsSharedMemory.buf)
+            sharedTlsPoints[:] = tlsLookUp.data
+            pool = get_context("spawn").Pool(processes=workers, initializer=initializeWorker,
+                                             initargs=(tlsSharedMemory.name, tlsLookUp.data.shape,
+                                                       tlsLookUp.data.dtype.str, skeletonSharedMemory.name,
+                                                       skeletonData.shape, skeletonData.dtype,
+                                                       densitiesSharedMemory.name, workerTlsDensities.shape,
+                                                       workerTlsDensities.dtype.str))
+    try:
+        tlsDensities = calculateDensity(None, tlsLookUp, 2 * parameters["initialSearchRange"], workers, pool,
+                                        useMultiProcessing)
+        if workerTlsDensities is not None:
+            workerTlsDensities[:] = tlsDensities
+        return _generateBranchesWithPool(tlsLookUp, skeletonData, tlsDensities, parameters, workers, pool,
+                                         workerSkeletonData, useMultiProcessing)
+    except BaseException:
+        if pool is not None:
+            pool.terminate()
+            pool.join()
+        raise
+    finally:
+        if pool is not None and pool._state == "RUN":
+            pool.close()
+            pool.join()
+        if tlsSharedMemory is not None:
+            tlsSharedMemory.close()
+            tlsSharedMemory.unlink()
+        if skeletonSharedMemory is not None:
+            skeletonSharedMemory.close()
+            skeletonSharedMemory.unlink()
+        if densitiesSharedMemory is not None:
+            densitiesSharedMemory.close()
+            densitiesSharedMemory.unlink()
+
+
+def _generateBranchesWithPool(tlsLookUp, skeletonData, tlsDensities, parameters, workers, pool,
+                              workerSkeletonData, useMultiProcessing):
+    skeletonBranches: List[Branch] = []
     searchRange = parameters["searchRange"]
     maxSearchRange = 2 * parameters["baseRadius"]
+    iterationId = 0
 
     while searchRange <= maxSearchRange:
         #print(searchRange, " / ", maxSearchRange)
         for _ in range(parameters["maxIterationNumFixedRange"]):
             recomputeSkeletonPoints(skeletonData, tlsLookUp, tlsDensities, searchRange,
-                                    parameters["baseRadius"], parameters["minMu"], parameters["maxMu"], workers)
+                                    parameters["baseRadius"], parameters["minMu"], parameters["maxMu"], workers,
+                                    pool=pool, workerSkeletonData=workerSkeletonData,
+                                    iterationId=iterationId,
+                                    useMultiProcessing=useMultiProcessing)
+            iterationId += 1
 
         skeletonData = filterCloseDataPoints(skeletonData, parameters["nearThreshold"])
-        computeSmoothDirectionalDegrees(skeletonData, parameters["kSmoothSigma"])
+        computeSmoothDirectionalDegrees(skeletonData, parameters["kSmoothSigma"],
+                                        workers if not useMultiProcessing else 1)
         setFixPoints(skeletonData, parameters["sigmaThreshold"])
         skeletonBranches.extend(findNewBranches(skeletonData,
                                                 parameters["kTracingThreshold"],
                                                 parameters["distanceTracingThreshold"],
                                                 np.deg2rad(parameters["angleTracingThreshold"]),
                                                 parameters["sigmaTracingThreshold"],
-                                                parameters["branchSizeThreshold"]))
+                                                parameters["branchSizeThreshold"],
+                                                workers if not useMultiProcessing else 1))
 
         searchRange *= 1 + parameters["iterationSpeed"]
 
@@ -53,8 +126,7 @@ def initializeSkeleton(seedPoints: npt.NDArray[np.double],
                                    ("relPathLocation", np.double),
                                    ("Sigma", np.double),
                                    ("isFix", np.bool_),
-                                   ("isBranch", np.bool_),
-                                   ])
+                                   ("isBranch", np.bool_)])
     skeletonData["Coords"] = seedPoints
     skeletonData["relPathLocation"] = relPathLocations
 
@@ -68,17 +140,31 @@ def recomputeSkeletonPoints(skeletonData: npt.NDArray,
                             baseRadius: float,
                             minMu: float,
                             maxMu: float,
-                            workers: int = 1):
+                            workers: int = 1,
+                            pool: Optional[Pool] = None,
+                            workerSkeletonData: Optional[npt.NDArray] = None,
+                            iterationId: int = 0,
+                            useMultiProcessing: bool = True
+                            ) -> Optional[Tuple[npt.NDArray, npt.NDArray]]:
     sigma = skeletonData["Sigma"]
     changing = ~skeletonData["isFix"]
     changingIndices = np.flatnonzero(changing)
 
-    setIterationParameters(baseRadius, searchRange, skeletonData, tlsDensities, tlsLookUp)
 
     if workers > 1:
-        with Pool(processes=workers) as pool:
-            results = pool.map(runIteration, changingIndices, chunksize=32)
+        if useMultiProcessing and pool is not None:
+            workerSkeletonData[:len(skeletonData)] = skeletonData
+            batchSize = min(MAX_QUERY_BATCH_SIZE,
+                            max(1, (len(changingIndices) + workers * 4 - 1) // (workers * 4)))
+            batches = [changingIndices[i:i + batchSize] for i in range(0, len(changingIndices), batchSize)]
+            tasks = [(batch, baseRadius, searchRange, len(skeletonData), iterationId) for batch in batches]
+            results = (result for batchResults in pool.map(runIterationBatch, tasks) for result in batchResults)
+        else:
+            # run Python code on a single thread, but pass the workers argument to KDTree queries
+            results = iter(runIterationBatchesLocally(changingIndices, baseRadius, searchRange, skeletonData,
+                                                      tlsDensities, tlsLookUp, MAX_QUERY_BATCH_SIZE, workers))
     else:
+        setIterationParameters(baseRadius, searchRange, skeletonData, tlsDensities, tlsLookUp)
         results = map(runIteration, changingIndices)
 
     repulsion = np.zeros((len(changingIndices), 3), dtype=np.double)
@@ -105,10 +191,7 @@ def recomputeSkeletonPoints(skeletonData: npt.NDArray,
     updatedIndices = changingIndices[compactChanging]
 
     skeletonData["Coords"][updatedIndices] = (
-            tlsAverage[compactChanging]
-            + mu[updatedIndices, np.newaxis]
-            * repulsion[compactChanging]
-    )
+            tlsAverage[compactChanging] + mu[updatedIndices, np.newaxis] * repulsion[compactChanging])
 
 
 def filterCloseDataPoints(skeletonData: npt.NDArray,
@@ -117,7 +200,6 @@ def filterCloseDataPoints(skeletonData: npt.NDArray,
     kept = np.ones_like(skeletonData, dtype=bool)
 
     skeletonLookUp = KDTree(skeletonData["Coords"])
-    # TODO: individual queries might be faster since some can be skipped
     skeletonNeighbors = skeletonLookUp.query_ball_tree(skeletonLookUp, nearThreshold)
     for idx in range(len(skeletonData)):
         if not kept[idx] or len(skeletonNeighbors[idx]) <= 1:
@@ -132,7 +214,8 @@ def filterCloseDataPoints(skeletonData: npt.NDArray,
 
 
 def computeSmoothDirectionalDegrees(skeletonData: npt.NDArray,
-                                    kNeighbors: int):
+                                    kNeighbors: int,
+                                    workers: int = 1):
     skeletonLookUp = KDTree(skeletonData["Coords"])
     notFix = ~skeletonData["isFix"] # (n)
     notFixIndices = np.flatnonzero(notFix)
@@ -140,7 +223,8 @@ def computeSmoothDirectionalDegrees(skeletonData: npt.NDArray,
     if len(notFixIndices) == 0:
         return
 
-    _, neighbors = skeletonLookUp.query(skeletonData[notFix]["Coords"], kNeighbors + 1) # (nF,k+1)
+    _, neighbors = skeletonLookUp.query(skeletonData[notFix]["Coords"], kNeighbors + 1,
+                                        workers=workers) # (nF,k+1)
     neighbors = neighbors[:,1:] # (nF,k)
 
     if np.any(neighbors == len(skeletonData)):
