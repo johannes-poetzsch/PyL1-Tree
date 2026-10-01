@@ -2,7 +2,7 @@ import numpy as np
 import numpy.typing as npt
 from scipy.spatial import KDTree
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from src.filterBranches import limitToRange
 from src.objects.branch import Branch
@@ -16,13 +16,17 @@ def smoothBranches(trunk: Branch,
                    tlsPoints: npt.NDArray[np.double],
                    unassignedTlsPoints: npt.NDArray[np.double],
                    parameters: Dict[str, Any],
-                   workers: int = 1) -> npt.NDArray[np.double]:
+                   workers: int = 1,
+                   useMultiprocessing: bool = True,
+                   ) -> npt.NDArray[np.double]:
     cleanUpBranches(trunk, unassignedTlsPoints, includeNewPointsForRanges=False)
 
     tlsLookUp = KDTree(tlsPoints)
+    densities = calculateDensity(tlsPoints, tlsLookUp, 2 * parameters["initialSearchRange"], workers,
+                                 useMultiprocessing)
     for branch in list(breadthFirstSearch(trunk)):
         smoothBranch(branch, tlsLookUp, 2 * parameters["initialSearchRange"], parameters["resolution"],
-                     np.deg2rad(parameters["smoothAngleThreshold"]), workers)
+                     np.deg2rad(parameters["smoothAngleThreshold"]), densities)
 
     return unassignedTlsPoints
 
@@ -74,13 +78,19 @@ def smoothBranch(branch: Branch,
                  searchRange: float,
                  resolution: float,
                  smoothAngleThreshold: float,
-                 workers: int = 1):
+                 tlsDensities: Optional[npt.NDArray[np.double]] = None,
+                 workers: int = 1,
+                 useMultiprocessing: bool = True):
     _, trimmed = branch.getDistances(branch.tlsPoints, trimStart=True, trimEnd=True, returnTrimming=True)
     tlsPoints = branch.tlsPoints[~trimmed]
     if len(tlsPoints) < 10:
         return
 
-    densities = calculateDensity(tlsPoints, tlsLookUp, searchRange, workers)
+    if tlsDensities is None:
+        densities = calculateDensity(tlsPoints, tlsLookUp, searchRange, workers, useMultiprocessing)
+    else:
+        tlsIndices = tlsLookUp.query(tlsPoints)[1]
+        densities = tlsDensities[tlsIndices]
     weightedPoints = tlsPoints * densities[:, np.newaxis]
 
     startPoint: npt.NDArray[np.double] = branch.skeletonPoints[0]

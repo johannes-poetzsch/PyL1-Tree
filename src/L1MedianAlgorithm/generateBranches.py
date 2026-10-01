@@ -1,5 +1,4 @@
-import sys
-from multiprocessing import get_context, shared_memory
+from multiprocessing import shared_memory
 from multiprocessing.pool import Pool
 import numpy as np
 import numpy.typing as npt
@@ -10,7 +9,7 @@ from .findBranches import findNewBranches
 from .runIteration import (MAX_QUERY_BATCH_SIZE, initializeWorker, runIteration,
                            runIterationBatch, runIterationBatchesLocally, setIterationParameters)
 from ..objects.branch import Branch
-from ..utils.pointMetrics import calculateDensity
+from ..utils.pointMetrics import calculateDensity, prepareDensityWorker
 
 
 def generateBranches(tlsPoints: npt.NDArray[np.double],
@@ -28,37 +27,25 @@ def generateBranches(tlsPoints: npt.NDArray[np.double],
     densitiesSharedMemory = None
     workerSkeletonData = None
     workerTlsDensities = None
-    if workers > 1 and useMultiProcessing:
-        skeletonSharedMemory = shared_memory.SharedMemory(create=True, size=max(1, skeletonData.nbytes))
-        densitiesSharedMemory = shared_memory.SharedMemory(create=True,
-                                                           size=max(1, tlsPoints.shape[0] * np.dtype(np.double).itemsize))
-        workerSkeletonData = np.ndarray(skeletonData.shape, dtype=skeletonData.dtype,
-                                        buffer=skeletonSharedMemory.buf)
-        workerTlsDensities = np.ndarray((tlsPoints.shape[0],), dtype=np.double,
-                                        buffer=densitiesSharedMemory.buf)
-
-        if sys.platform.startswith("linux"):
-            # Fork inherits the parent's read-only tree through copy on write.
-            initializeWorker(inheritedTree=tlsLookUp)
-            pool = get_context("fork").Pool(processes=workers, initializer=initializeWorker,
-                                            initargs=(None, None, None, skeletonSharedMemory.name,
-                                                      skeletonData.shape, skeletonData.dtype,
-                                                      densitiesSharedMemory.name, workerTlsDensities.shape,
-                                                      workerTlsDensities.dtype.str))
-        else:
-            tlsSharedMemory = shared_memory.SharedMemory(create=True, size=tlsLookUp.data.nbytes)
-            sharedTlsPoints = np.ndarray(tlsLookUp.data.shape, dtype=tlsLookUp.data.dtype,
-                                         buffer=tlsSharedMemory.buf)
-            sharedTlsPoints[:] = tlsLookUp.data
-            pool = get_context("spawn").Pool(processes=workers, initializer=initializeWorker,
-                                             initargs=(tlsSharedMemory.name, tlsLookUp.data.shape,
-                                                       tlsLookUp.data.dtype.str, skeletonSharedMemory.name,
-                                                       skeletonData.shape, skeletonData.dtype,
-                                                       densitiesSharedMemory.name, workerTlsDensities.shape,
-                                                       workerTlsDensities.dtype.str))
     try:
-        tlsDensities = calculateDensity(None, tlsLookUp, 2 * parameters["initialSearchRange"], workers, pool,
+        tlsDensities = calculateDensity(None, tlsLookUp, 2 * parameters["initialSearchRange"], workers,
                                         useMultiProcessing)
+        if workers > 1 and useMultiProcessing:
+            iterationContext, iterationInitArgs, tlsSharedMemory = prepareDensityWorker(tlsLookUp)
+            skeletonSharedMemory = shared_memory.SharedMemory(create=True, size=max(1, skeletonData.nbytes))
+            densitiesSharedMemory = shared_memory.SharedMemory(
+                create=True, size=max(1, tlsPoints.shape[0] * np.dtype(np.double).itemsize))
+            workerSkeletonData = np.ndarray(skeletonData.shape, dtype=skeletonData.dtype,
+                                            buffer=skeletonSharedMemory.buf)
+            workerTlsDensities = np.ndarray((tlsPoints.shape[0],), dtype=np.double,
+                                            buffer=densitiesSharedMemory.buf)
+
+            initializerArgs = (*iterationInitArgs[:3], skeletonSharedMemory.name,
+                               skeletonData.shape, skeletonData.dtype,
+                               densitiesSharedMemory.name, workerTlsDensities.shape,
+                               workerTlsDensities.dtype.str, iterationInitArgs[3])
+            pool = iterationContext.Pool(processes=workers, initializer=initializeWorker,
+                                         initargs=initializerArgs)
         if workerTlsDensities is not None:
             workerTlsDensities[:] = tlsDensities
         return _generateBranchesWithPool(tlsLookUp, skeletonData, tlsDensities, parameters, workers, pool,
