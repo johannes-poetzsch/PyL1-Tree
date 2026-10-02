@@ -1,9 +1,10 @@
+import warnings
 from heapq import heappop, heappush
 
 import numpy as np
 import numpy.typing as npt
 from scipy.optimize import least_squares
-from scipy.sparse import csr_array
+from scipy.sparse import SparseEfficiencyWarning, csr_array
 from scipy.sparse.csgraph import breadth_first_order, connected_components, dijkstra, reconstruct_path
 from scipy.spatial import KDTree
 from typing import Any, Dict, List, Optional, Tuple
@@ -223,7 +224,9 @@ def buildConnectedGraph(tlsPoints: npt.NDArray[np.double],
         rows.extend([startIdx, endIdx])
         cols.extend([endIdx, startIdx])
         distances.append(distance)
-    neighborGraph[np.array(rows), np.array(cols)] = np.repeat(distances, 2)
+    with warnings.catch_warnings(record=False):
+        warnings.simplefilter('ignore', SparseEfficiencyWarning)
+        neighborGraph[np.array(rows), np.array(cols)] = np.repeat(distances, 2)
 
     return neighborGraph
 

@@ -5,7 +5,7 @@ from scipy.spatial import KDTree
 from typing import List, Optional, Tuple
 
 from src.objects.branch import Branch
-from utils.geometry import queryPointsNearSegment
+from src.utils.geometry import queryPointsNearSegment
 
 
 class TlsPointManager:

@@ -338,27 +338,25 @@ class Branch(BoundedObject):
                 continue
 
             isAtBranch = branch.getPointsBBDistance(points) < distances
-            newDistances = distances.copy()
-            trimmed = np.zeros(len(points), dtype=bool)
-
             if useTrimming:
-                newDistances[isAtBranch], trimmed[isAtBranch] = branch.getDistances(
+                newDistances, trimmed = branch.getDistances(
                     points[isAtBranch], trimStart=branch.isStem(), trimEnd=branch.isLeaf(), returnTrimming=True)
             else:
-                newDistances[isAtBranch] = branch.getDistances(points[isAtBranch])
+                newDistances = branch.getDistances(points[isAtBranch])
 
-            improved = newDistances < distances
+            improvedAtBranch = newDistances < distances[isAtBranch]
 
-            if xp.count_nonzero(improved) > 0:
-                distances[improved] = newDistances[improved]
+            if xp.count_nonzero(improvedAtBranch) > 0:
+                improvedIndices = xp.flatnonzero(isAtBranch)[improvedAtBranch]
+                distances[improvedIndices] = newDistances[improvedAtBranch]
                 maxDistance = distances.max()
 
                 if branch.isRemoved:
-                    closest[improved] = -1
+                    closest[improvedIndices] = -1
                 else:
-                    closest[improved] = branchIdx
+                    closest[improvedIndices] = branchIdx
                     if useTrimming:
-                        closest[improved & trimmed] = -1
+                        closest[improvedIndices[trimmed[improvedAtBranch]]] = -1
 
         if xp is cp:
             closest, distances = cp.asnumpy(closest), cp.asnumpy(distances)
@@ -388,11 +386,8 @@ class Branch(BoundedObject):
             worsened = xp.asarray(distances > originalDistances)
             closestIndices = closeIndices
             closestIndices[worsened], distances[worsened] = Branch.findClosestBranches(
-                points[worsened], branches,
-                branchIndices=otherBranchIndices,
-                initialClosest=closeIndices[worsened],
-                initialDistances=distances[worsened],
-                useTrimming=useTrimming)
+                points[worsened], branches, branchIndices=otherBranchIndices,
+                initialClosest=closeIndices[worsened], initialDistances=distances[worsened], useTrimming=useTrimming)
         else:
             closestIndices, distances = Branch.findClosestBranches(points, branches,
                                                                    branchIndices=otherBranchIndices,

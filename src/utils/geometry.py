@@ -7,6 +7,14 @@ from scipy.stats import ttest_ind
 from typing import List, Literal, Optional, Tuple
 
 
+USE_FAST_STRIP_POINT_DISTANCES = False
+
+
+def setFastStripPointDistances(enabled: bool) -> None:
+    global USE_FAST_STRIP_POINT_DISTANCES
+    USE_FAST_STRIP_POINT_DISTANCES = enabled
+
+
 def angle(directions_a: npt.NDArray,
           directions_b: npt.NDArray,
           vectorsAreNormalized: bool = True) -> npt.NDArray:
@@ -103,6 +111,8 @@ def movingTTest(sequence: npt.NDArray[np.double]) -> Optional[int]:
         firstWindow = firstWindow[~np.isnan(firstWindow)]
         secondWindow = doubleWindow[windowSize:]
         secondWindow = secondWindow[~np.isnan(secondWindow)]
+        if len(firstWindow) < 2 or len(secondWindow) < 2:
+            continue
         _, pValue = ttest_ind(firstWindow, secondWindow, alternative='less')
 
         if pValue < 0.01: # TODO: try higher Values
@@ -122,7 +132,7 @@ def queryPointsNearSegment(lookUp: KDTree,
                            endPoint: npt.NDArray[np.double],
                            range: float,
                            spacing: Optional[float] = None
-                           ) -> npt.NDArray[np.double]:
+                           ) -> npt.NDArray[np.intp]:
     segmentVector = endPoint - startPoint
     segmentLength = np.linalg.norm(segmentVector)
 
@@ -138,7 +148,8 @@ def queryPointsNearSegment(lookUp: KDTree,
     actualSpacing = segmentLength / numIntervals
     queryRadius = np.sqrt(range ** 2 + (actualSpacing / 2) ** 2)
 
-    return np.concatenate(lookUp.query_ball_point(samples, queryRadius), axis=0)
+    indices = np.concatenate(lookUp.query_ball_point(samples, queryRadius), axis=0)
+    return indices.astype(np.intp, copy=False)
 
 
 def pointSort(points: npt.NDArray,
@@ -180,6 +191,34 @@ def stripPointsDistances(strip: npt.NDArray,  # (L+1,D)
                                npt.NDArray[np.double]):
     if len(strip) < 2:
         raise ValueError('Strip must have at least 2 points')
+
+    xp = cp.get_array_module(strip)
+    segmentVectors = strip[1:] - strip[:-1]
+    if xp.any(xp.all(segmentVectors == 0, axis=1)):
+        raise ValueError('Strip must not contain zero-length segments')
+
+    if USE_FAST_STRIP_POINT_DISTANCES and not returnPedalInfo:
+        return _stripPointDistancesOnly(strip, points, trimStart, trimEnd, returnTrimming, maxBatchSize)
+
+    return _stripPointsDistancesWithInfo(strip, points, trimStart, trimEnd, returnTrimming,
+                                         returnPedalInfo, maxBatchSize)
+
+
+def _stripPointsDistancesWithInfo(strip: npt.NDArray,
+                                  points: npt.NDArray,
+                                  trimStart: bool,
+                                  trimEnd: bool,
+                                  returnTrimming: bool,
+                                  returnPedalInfo: bool,
+                                  maxBatchSize: int
+                                  ) -> (Tuple[npt.NDArray[np.double], npt.NDArray[np.double], npt.NDArray[np.intp], npt.NDArray[np.bool]] |
+                                        Tuple[npt.NDArray[np.double], npt.NDArray[np.double], npt.NDArray[np.intp]] |
+                                        Tuple[npt.NDArray[np.double], npt.NDArray[np.bool]] |
+                                        npt.NDArray[np.double]):
+    if len(strip) < 2:
+        raise ValueError('Strip must have at least 2 points')
+    if maxBatchSize <= 0:
+        raise ValueError("maxBatchSize must be greater than zero")
     xp = cp.get_array_module(strip, points)
     segmentStarts = strip[:-1]
     segmentEnds = strip[1:]
@@ -190,30 +229,25 @@ def stripPointsDistances(strip: npt.NDArray,  # (L+1,D)
     closestSegments = np.empty(len(points), dtype=np.intp)
     trimmed = np.zeros(len(points), dtype=np.bool)
 
-    batchCount = max(1, np.ceil(len(points) / maxBatchSize).astype(np.intp))
-    for batchPoints, batchDistances, batchPedalPoints, batchClosestSegments, batchTrimmed in zip(
-        np.array_split(points, batchCount), np.array_split(distances, batchCount),
-        np.array_split(pedalPoints, batchCount), np.array_split(closestSegments, batchCount),
-        np.array_split(trimmed, batchCount)
-    ):
-        pointsToSegmentStarts = segmentStarts - batchPoints[:,np.newaxis] # (N,L,D)
-        ## TODO: compare runtime to cupy/torch vecdot
-        #tMatrix = xp.einsum('NLD,LD->NL', pointsToSegmentStarts, segmentVectors) / xp.einsum('LD,LD->L', segmentVectors, segmentVectors) # (N,L)
-        tMatrix = np.vecdot(pointsToSegmentStarts, segmentVectors) / np.vecdot(segmentVectors, segmentVectors) # (N,L)
-        del pointsToSegmentStarts
-        potentialPedalPoints = segmentStarts[xp.newaxis] - xp.clip(tMatrix, 0, 1)[:,:,xp.newaxis] * segmentVectors[xp.newaxis] # (N,L,D)
+    for start in range(0, len(points), maxBatchSize):
+        b = slice(start, min(start + maxBatchSize, len(points)))
 
-        segmentDistances: npt.NDArray = xp.linalg.norm(potentialPedalPoints - batchPoints[:,np.newaxis], axis=-1) # (N,L)
-        batchClosestSegments[:] = segmentDistances.argmin(axis=-1) # (N)
-        batchDistances[:] = np.take_along_axis(segmentDistances, batchClosestSegments[:,np.newaxis], axis=-1).squeeze() # (N)
+        pointsToSegmentStarts = segmentStarts - points[b,np.newaxis] # (N,L,D)
+        projection = np.vecdot(pointsToSegmentStarts, segmentVectors) / np.vecdot(segmentVectors, segmentVectors) # (N,L)
+        clippedProjection = xp.clip(projection, 0.0, 1.0)
+        potentialPedalPoints = segmentStarts[xp.newaxis] - clippedProjection[:,:,xp.newaxis] * segmentVectors[xp.newaxis] # (N,L,D)
+
+        segmentDistances: npt.NDArray = xp.linalg.norm(potentialPedalPoints - points[b,np.newaxis], axis=-1) # (N,L)
+        closestSegments[b] = segmentDistances.argmin(axis=-1) # (N)
+        distances[b] = np.take_along_axis(segmentDistances, closestSegments[b,np.newaxis], axis=-1).squeeze() # (N)
 
         if returnPedalInfo:
-            batchPedalPoints[:] = np.take_along_axis(potentialPedalPoints, batchClosestSegments[:,np.newaxis,np.newaxis], axis=1).squeeze() # (N,D)
+            pedalPoints[b] = np.take_along_axis(potentialPedalPoints, closestSegments[b,np.newaxis,np.newaxis], axis=1).squeeze() # (N,D)
         if trimStart:
-            batchTrimmed |= (batchClosestSegments == 0) & (tMatrix[:,0] < 0)
+            trimmed[b] |= (closestSegments[b] == 0) & (projection[:,0] < 0)
         if trimEnd:
             endIdx = len(segmentVectors) - 1
-            batchTrimmed |= (batchClosestSegments == endIdx) & (tMatrix[:,endIdx] > 1)
+            trimmed[b] |= (closestSegments[b] == endIdx) & (projection[:,endIdx] > 1)
 
     if returnPedalInfo:
         if returnTrimming:
@@ -226,6 +260,63 @@ def stripPointsDistances(strip: npt.NDArray,  # (L+1,D)
             return distances, trimmed
         else:
             return distances[~trimmed]
+
+
+def _stripPointDistancesOnly(strip: npt.NDArray,
+                             points: npt.NDArray,
+                             trimStart: bool,
+                             trimEnd: bool,
+                             returnTrimming: bool,
+                             maxBatchSize: int
+                             ) -> (Tuple[npt.NDArray[np.double], npt.NDArray[np.bool]] | npt.NDArray[np.double]):
+    if len(strip) < 2:
+        raise ValueError('Strip must have at least 2 points')
+    if maxBatchSize <= 0:
+        raise ValueError("maxBatchSize must be greater than zero")
+
+    xp = cp.get_array_module(strip, points)
+    segmentStarts = strip[:-1]
+    segmentVectors = strip[1:] - segmentStarts
+    segmentLengthsSquared = xp.sum(segmentVectors * segmentVectors, axis=1)
+
+    distances = xp.empty(len(points), dtype=xp.double)
+    trimmed = xp.zeros(len(points), dtype=xp.bool_)
+    origin = segmentStarts[0]
+    localStarts = segmentStarts - origin
+    localStartLengthsSquared = xp.sum(localStarts * localStarts, axis=1)
+    localStartSegmentDots = xp.sum(localStarts * segmentVectors, axis=1)
+
+    for start in range(0, len(points), maxBatchSize):
+        b = slice(start, min(start + maxBatchSize, len(points)))
+        localPoints = points[b] - origin
+        pointLengthsSquared = xp.sum(localPoints * localPoints, axis=1)
+
+        pointStartDots = localPoints @ localStarts.T
+        pointSegmentDots = localPoints @ segmentVectors.T - localStartSegmentDots
+        startDistancesSquared = (pointLengthsSquared[:,xp.newaxis]
+                                 + localStartLengthsSquared[xp.newaxis,:]
+                                 - 2 * pointStartDots)
+
+        projection = pointSegmentDots / segmentLengthsSquared[xp.newaxis,:]
+        clippedProjection = xp.clip(projection, 0.0, 1.0)
+        segmentDistancesSquared = (startDistancesSquared
+                                   - 2 * clippedProjection * pointSegmentDots
+                                   + clippedProjection * clippedProjection * segmentLengthsSquared[xp.newaxis,:])
+        xp.maximum(segmentDistancesSquared, 0.0, out=segmentDistancesSquared)
+
+        closestSegments = xp.argmin(segmentDistancesSquared, axis=1)
+        closestDistancesSquared = xp.take_along_axis(segmentDistancesSquared, closestSegments[:,xp.newaxis], axis=1)[:,0]
+        distances[b] = xp.sqrt(closestDistancesSquared)
+
+        if trimStart:
+            trimmed[b] |= (closestSegments == 0) & (projection[:,0] < 0)
+        if trimEnd:
+            endIdx = len(segmentVectors) - 1
+            trimmed[b] |= ((closestSegments == endIdx) & (projection[:,endIdx] > 1))
+
+    if returnTrimming:
+        return distances, trimmed
+    return distances[~trimmed]
 
 
 def skewLinesDistance(a1: npt.NDArray[np.double], b1: npt.NDArray[np.double], # 2 points on first line
