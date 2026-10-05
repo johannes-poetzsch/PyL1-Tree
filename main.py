@@ -16,6 +16,7 @@ from src.filterBranches import filterByLength, filterTreeBranches
 from src.L1MedianAlgorithm.generateSeeds import generateSeeds
 from src.L1MedianAlgorithm.generateBranches import generateBranches
 from src.smoothBranches import cleanUpBranches, smoothBranches
+from src.utils.geometry import setFastStripPointDistances
 from src.utils.iteration import breadthFirstSearch
 from src.utils.voxelDownsampling import voxelDownsampling
 
@@ -75,6 +76,8 @@ def parseArguments(argv):
 def createQSM(tlsPoints: npt.NDArray[np.double],
               parameters: Dict[str, Any],
               workers: int = 1):
+    setFastStripPointDistances(parameters.get("useFastStripPointDistances", True))
+
     if parameters["heightAttributeIdx"] != 2:
         h = parameters["heightAttributeIdx"]
         height = tlsPoints[:,h].copy()

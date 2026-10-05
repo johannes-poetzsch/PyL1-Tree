@@ -9,6 +9,10 @@ parameters:
   maxMu: 0.35
   maxIterationNumFixedRange: 20
   iterationSpeed: 0.4
+  enableConvergenceStopping: false
+  convergenceToleranceFactor: 0.0001
+  sigmaTolerance: 1e-4
+  requiredStableIterations: 3
   nearThreshold: 0.01
   sigmaThreshold: 0.9
   kSmoothSigma: 6
@@ -27,3 +31,4 @@ parameters:
   moveStep: 0.01
   smoothAngleThreshold: 45
   heightAttributeIdx: 2
+  useFastStripPointDistances: True

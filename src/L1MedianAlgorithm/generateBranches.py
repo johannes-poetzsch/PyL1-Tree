@@ -70,22 +70,30 @@ def generateBranches(tlsPoints: npt.NDArray[np.double],
             densitiesSharedMemory.unlink()
 
 
-def _generateBranchesWithPool(tlsLookUp, skeletonData, tlsDensities, parameters, workers, pool,
-                              workerSkeletonData, useMultiProcessing):
+def _generateBranchesWithPool(tlsLookUp: KDTree,
+                              skeletonData: npt.NDArray,
+                              tlsDensities: npt.NDArray[np.double],
+                              parameters: Dict[str, Any],
+                              workers: int,
+                              pool: Pool,
+                              workerSkeletonData: Optional[npt.NDArray] = None,
+                              useMultiProcessing: bool = True):
     skeletonBranches: List[Branch] = []
     searchRange = parameters["searchRange"]
     maxSearchRange = 2 * parameters["baseRadius"]
     iterationId = 0
 
     while searchRange <= maxSearchRange:
-        #print(searchRange, " / ", maxSearchRange)
-        for _ in range(parameters["maxIterationNumFixedRange"]):
-            recomputeSkeletonPoints(skeletonData, tlsLookUp, tlsDensities, searchRange,
-                                    parameters["baseRadius"], parameters["minMu"], parameters["maxMu"], workers,
-                                    pool=pool, workerSkeletonData=workerSkeletonData,
-                                    iterationId=iterationId,
-                                    useMultiProcessing=useMultiProcessing)
-            iterationId += 1
+        recomputeSkeletonPoints(skeletonData, tlsLookUp, tlsDensities, searchRange,
+                                parameters["baseRadius"], parameters["minMu"], parameters["maxMu"],
+                                parameters["maxIterationNumFixedRange"],
+                                parameters.get("enableConvergenceStopping", False),
+                                parameters.get("requiredStableIterations", 3),
+                                parameters.get("convergenceToleranceFactor", 0.0001),
+                                parameters.get("sigmaTolerance", 0.0001),
+                                workers, pool=pool, workerSkeletonData=workerSkeletonData,
+                                iterationId=iterationId, useMultiProcessing=useMultiProcessing)
+        iterationId += parameters["maxIterationNumFixedRange"]
 
         skeletonData = filterCloseDataPoints(skeletonData, parameters["nearThreshold"])
         computeSmoothDirectionalDegrees(skeletonData, parameters["kSmoothSigma"],
@@ -127,16 +135,60 @@ def recomputeSkeletonPoints(skeletonData: npt.NDArray,
                             baseRadius: float,
                             minMu: float,
                             maxMu: float,
+                            maxIterationNumFixedRange: int = 20,
+                            enableConvergenceStopping: bool = False,
+                            requiredStableIterations: int = 3,
+                            convergenceToleranceFactor: float = 0.0001,
+                            sigmaTolerance: float = 0.0001,
                             workers: int = 1,
                             pool: Optional[Pool] = None,
                             workerSkeletonData: Optional[npt.NDArray] = None,
                             iterationId: int = 0,
-                            useMultiProcessing: bool = True
-                            ) -> Optional[Tuple[npt.NDArray, npt.NDArray]]:
+                            useMultiProcessing: bool = True):
+    displacementTolerance = convergenceToleranceFactor * max(baseRadius, searchRange)
+    stableIterations = 0
+
+    for _ in range(maxIterationNumFixedRange):
+        maxChanges = recomputeSkeletonPointsIteration(skeletonData, tlsLookUp, tlsDensities, searchRange,
+                                                      baseRadius, minMu, maxMu, workers, pool=pool,
+                                                      workerSkeletonData=workerSkeletonData,
+                                                      iterationId=iterationId, useMultiProcessing=useMultiProcessing,
+                                                      returnChangeData=enableConvergenceStopping)
+        iterationId += 1
+
+        if enableConvergenceStopping:
+            maxDisplacement, maxSigmaChange = maxChanges
+            if maxDisplacement <= displacementTolerance and maxSigmaChange <= sigmaTolerance:
+                stableIterations += 1
+            else:
+                stableIterations = 0
+            if stableIterations >= requiredStableIterations:
+                print("triggered early convergence")
+                return
+
+
+def recomputeSkeletonPointsIteration(skeletonData: npt.NDArray,
+                                     tlsLookUp: KDTree,
+                                     tlsDensities: npt.NDArray[np.double],
+                                     searchRange: float,
+                                     baseRadius: float,
+                                     minMu: float,
+                                     maxMu: float,
+                                     workers: int = 1,
+                                     returnChangeData: bool = False,
+                                     pool: Optional[Pool] = None,
+                                     workerSkeletonData: Optional[npt.NDArray] = None,
+                                     iterationId: int = 0,
+                                     useMultiProcessing: bool = True
+                                     ) -> Optional[Tuple[npt.NDArray, npt.NDArray]]:
     sigma = skeletonData["Sigma"]
     changing = ~skeletonData["isFix"]
     changingIndices = np.flatnonzero(changing)
 
+    if returnChangeData:
+        active = ~skeletonData["isFix"]
+        coordsBefore = skeletonData["Coords"][active].copy()
+        sigmaBefore = skeletonData["Sigma"][active].copy()
 
     if workers > 1:
         if useMultiProcessing and pool is not None:
@@ -179,6 +231,11 @@ def recomputeSkeletonPoints(skeletonData: npt.NDArray,
 
     skeletonData["Coords"][updatedIndices] = (
             tlsAverage[compactChanging] + mu[updatedIndices, np.newaxis] * repulsion[compactChanging])
+
+    if returnChangeData:
+        maxDisplacement = np.max(np.linalg.norm(skeletonData["Coords"][active] - coordsBefore, axis=1), initial=0.0)
+        maxSigmaChange = np.max(np.abs(skeletonData["Sigma"][active] - sigmaBefore), initial=0.0)
+        return maxDisplacement, maxSigmaChange
 
 
 def filterCloseDataPoints(skeletonData: npt.NDArray,
