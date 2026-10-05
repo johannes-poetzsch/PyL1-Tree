@@ -1,10 +1,10 @@
-import cupy as cp
 import networkx as nx
 import numpy as np
 import numpy.typing as npt
 from typing import Dict, List, Optional
 
 from src.objects.branch import Branch
+from src.utils.gpuAcceleration import array_module
 
 
 def buildSubtreeFromGraph(skeletonGraph: nx.DiGraph,
@@ -54,7 +54,7 @@ def generateSearchRanges(branches: List[Branch], # have to be semi-ordered by di
             searchRanges[branch] = 0.0
             continue
 
-        xp = cp.get_array_module(branch.tlsPoints)
+        xp = array_module(branch.tlsPoints)
         distances = branch.getDistances(branch.tlsPoints,
                                         trimStart=useTrimming and branch.isStem(),
                                         trimEnd=useTrimming and branch.isLeaf())

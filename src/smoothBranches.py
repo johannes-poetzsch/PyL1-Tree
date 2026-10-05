@@ -4,8 +4,7 @@ from scipy.spatial import KDTree
 
 from typing import Any, Dict
 
-from src.adjustBifurcations import adjustBifurcations
-from src.filterBranches import filterByLength, limitToRange
+from src.filterBranches import limitToRange
 from src.objects.branch import Branch
 from src.utils.branchUtils import generateSearchRanges
 from src.utils.geometry import distanceAlongDirection, getStripAngles, normalizeVectors, stripPointsDistances

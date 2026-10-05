@@ -1,6 +1,5 @@
 __all__ = ['adjustBifurcations']
 
-import cupy as cp
 import numpy as np
 import numpy.typing as npt
 
@@ -8,12 +7,13 @@ from itertools import combinations
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.objects.branch import Branch
-from src.utils.geometry import linesPointsDistances, normalizeVectors, angle, stripPointsDistances
+from src.utils.geometry import linesPointsDistances, normalizeVectors, angle
 from src.utils.iteration import breadthFirstSearch
+from src.utils.gpuAcceleration import array_module
+from src.utils.gpuAcceleration import to_numpy
 
 
 def adjustBifurcations(trunk: Branch, parameters: Dict[str, Any]):
-    xp = np
     # using list ensures this is the original order of branches before any adjustments
     for parent in list(breadthFirstSearch(trunk, returnLeaves=False)):
         adjustmentCompleted = False
@@ -25,7 +25,7 @@ def adjustBifurcations(trunk: Branch, parameters: Dict[str, Any]):
             # make sure bifurcation is start of each associated branch
             parent.flip()
             
-            tlsPoints = xp.asarray(xp.concatenate([b.tlsPoints for b in associatedBranches]))
+            tlsPoints = np.concatenate([b.tlsPoints for b in associatedBranches])
             adjustmentIdx, adjustmentPoint, adjustmentBranch = determineAdjustment(
                 associatedBranches, parent, tlsPoints, parameters["resolution"],
                 np.deg2rad(parameters["minAngleThreshold"]), np.deg2rad(parameters["maxAngleThreshold"]))
@@ -140,7 +140,9 @@ def getDistanceMetrics(tlsPoints: npt.NDArray[np.double],
                        isCredible: Dict[Branch, npt.NDArray],
                        maxBatchSize: int = 1024
                        ) -> Tuple[Dict[Branch, npt.NDArray[np.double]], Dict[Branch, npt.NDArray[np.double]], Dict[Branch, npt.NDArray[np.double]]]:
-    xp = cp.get_array_module(tlsPoints)
+    xp = array_module(tlsPoints)
+    branchSkeletonPoints = {b: xp.asarray(p) for b, p in branchSkeletonPoints.items()}
+    isCredible = {b: xp.asarray(c) for b, c in isCredible.items()}
 
     newDistancesSums = {b: xp.double(0) for b in branches}
     distancesToRemovedSegmentsSums = {b: xp.double(0) for b in branches}
@@ -163,7 +165,7 @@ def getDistanceMetrics(tlsPoints: npt.NDArray[np.double],
             targetDistances = originalDistances[targetBranch]
             targetPoints = branchSkeletonPoints[targetBranch]
             tIsCredible = isCredible[targetBranch]
-            if np.count_nonzero(tIsCredible) == 0:
+            if xp.count_nonzero(tIsCredible) == 0:
                 continue
 
             distancesToNewBifurcation = xp.min(xp.stack(
@@ -171,20 +173,15 @@ def getDistanceMetrics(tlsPoints: npt.NDArray[np.double],
                  for b in otherBranches]),
                 axis=0)
 
-            # if xp is cp:
-            #    distancesUntilTargets = cp.asarray(torch.as_tensor(targetDistances, device='cuda').cummin(dim=0).values)
-            #    #distancesUntilTargets = cum_min(targetDistances, axis=0, reversed=False) # (T,N')
-            # else:
+            # cupy does not currently support minimum.accumulate, so this method can only run on cpu
+            # if this method is ever added to cupy, this code can be used on the with cupy
             distancesUntilTargets = np.minimum.accumulate(targetDistances, axis=0)
             distancesToRemovedSegments = xp.minimum(distancesUntilTargets[tIsCredible], xp.min(
                 xp.stack([firstSegmentDistances[b] for b in otherBranches]), axis=0))
             del distancesUntilTargets
 
-            # if xp is cp:
-            #    distancesFromTargets = cp.flipud(cp.asarray(torch.as_tensor(targetDistances, device='cuda').flipud().cummin(dim=0).values))
-            #    #distancesFromTargets = cum_min(targetDistances, axis=0, reversed=True) # (T,N')
-            # else:
-            distancesFromTargets = np.flipud(np.minimum.accumulate(np.flipud(targetDistances)))
+
+            distancesFromTargets = xp.flipud(xp.minimum.accumulate(xp.flipud(targetDistances)))
             del targetDistances
             distancesFromTargets = xp.roll(distancesFromTargets, -1, axis=0)
             distancesFromTargets[-1] = xp.inf
@@ -202,14 +199,9 @@ def getDistanceMetrics(tlsPoints: npt.NDArray[np.double],
             associatedTlsCounts[targetBranch] += xp.count_nonzero(isAtBifurcation, axis=1)
 
     with np.errstate(divide='ignore', invalid='ignore'):
-        meanNewDistances = {b: newDistancesSums[b] / len(tlsPoints) for b in branches}
-        meanDistancesToRemovedSegments = {b: distancesToRemovedSegmentsSums[b] / associatedTlsCounts[b] for b in branches}
-        meanDistancesToNewBifurcation = {b: distancesToNewBifurcationSums[b] / associatedTlsCounts[b] for b in branches}
-
-    if xp is cp:
-        meanNewDistances = {b: cp.asnumpy(meanNewDistances) for b in branches}
-        meanDistancesToRemovedSegments = {b: cp.asnumpy(meanDistancesToRemovedSegments) for b in branches}
-        meanDistancesToNewBifurcation = {b: cp.asnumpy(meanDistancesToNewBifurcation) for b in branches}
+        meanNewDistances = {b: to_numpy(newDistancesSums[b] / len(tlsPoints)) for b in branches}
+        meanDistancesToRemovedSegments = {b: to_numpy(distancesToRemovedSegmentsSums[b] / associatedTlsCounts[b]) for b in branches}
+        meanDistancesToNewBifurcation = {b: to_numpy(distancesToNewBifurcationSums[b] / associatedTlsCounts[b]) for b in branches}
 
     return meanNewDistances, meanDistancesToRemovedSegments, meanDistancesToNewBifurcation
 

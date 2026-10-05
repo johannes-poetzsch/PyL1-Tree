@@ -1,6 +1,7 @@
+import gc
+import warnings
 from collections import deque
-import cupy as cp
-import cuml.cluster as gpu_cluster
+from dbscan import DBSCAN
 from itertools import chain, combinations
 import networkx as nx
 import numpy as np
@@ -12,6 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from src.objects.branch import Branch
 from src.utils.branchUtils import buildSubtreeFromGraph
 from src.utils.geometry import angle, distanceAlongDirection, getValueOccurrences, normalizeVectors
+from src.utils.gpuAcceleration import gpuEnabled, to_numpy, xp
 from src.utils.iteration import breadthFirstSearch
 
 
@@ -25,7 +27,6 @@ def extendSkeleton(trunk: Branch,
 
     skeletonPoints = np.concatenate([b.skeletonPoints for b in list(breadthFirstSearch(trunk))], axis=0)
     skeletonLookUp = KDTree(skeletonPoints)
-
     newSkeletons = []
     for cluster in clusters:
         clusterPoints = unassignedTlsPoints[cluster]
@@ -49,7 +50,8 @@ def getClusters(unassignedTlsPoints: npt.NDArray[np.double],
                 minClusterSize: int,
                 keptPercentage: int = 0.99
                 ) -> List[npt.NDArray[np.intp]]:
-    _, clusterLabels = skl_cluster.dbscan(unassignedTlsPoints, eps=radius, min_samples=5)
+    print("clustering", len(unassignedTlsPoints), "points")
+    clusterLabels, _ = DBSCAN(unassignedTlsPoints, eps=radius, min_samples=5)
     clusters = [indices for label, indices in getValueOccurrences(clusterLabels) if label >= 0]
 
     clusterSizes = [len(c) for c in clusters]
@@ -72,23 +74,28 @@ def generateSkeleton(tlsPoints: npt.NDArray[np.double],
                      minAngleThreshold: float,
                      maxAngleThreshold: float,
                      smoothAngleThreshold: float,
+                     maxIterationNumber: int = 100,
                      testMode: bool = False) -> Optional[List[Branch]]:
-    gpuTlsPoints = cp.asarray(tlsPoints)
     skeletonCandidate = None
     candidateTlsDistance = np.inf
+    
+    minSkeletonSize = 3
+    maxSkeletonSize = int(len(tlsPoints) ** 0.5)
+    maxIterationNumber = min(maxIterationNumber, maxSkeletonSize - minSkeletonSize + 1)
+    skeletonSizes = np.linspace(minSkeletonSize, maxSkeletonSize, maxIterationNumber, endpoint=True, dtype=np.intp)
 
-    for skeletonSize in range(3, int(len(tlsPoints) ** 0.5) + 1):
+    for skeletonSize in skeletonSizes:
         if testMode:
             # since randomness yields different results in python and matlab, the same randomly shuffled set of points is sampled instead.
             initPoints = tlsPoints[[(i + skeletonSize) % len(tlsPoints) for i in range(skeletonSize)]]
             skeletonPoints = (skl_cluster.KMeans(n_clusters=skeletonSize, init=initPoints, max_iter=100, tol=1e-5)
                               .fit(tlsPoints).cluster_centers_)
         else:
-            if len(tlsPoints) > 1000:
-                skeletonPoints = cp.asnumpy(gpu_cluster.KMeans(n_clusters=skeletonSize, max_iter=100, tol=1e-5)
-                                            .fit(gpuTlsPoints).cluster_centers_)
-            else:
-                skeletonPoints = skl_cluster.KMeans(n_clusters=skeletonSize, max_iter=100, tol=1e-5).fit(tlsPoints).cluster_centers_
+            skeletonPoints = None
+            if gpuEnabled:
+                skeletonPoints = getClusterCenterGPU(tlsPoints, skeletonSize)
+            if skeletonPoints is None:
+                skeletonPoints = getClusterCentersCPU(tlsPoints, skeletonSize)
         distances, indices = skeletonLookUp.query(skeletonPoints)
         closestIdx = distances.argmin()
 
@@ -122,6 +129,63 @@ def generateSkeleton(tlsPoints: npt.NDArray[np.double],
     return skeletonCandidate
 
 
+def getClusterCentersCPU(points: npt.NDArray[np.double], k: int) -> npt.NDArray[np.double]:
+    if len(points) < 10000 or (len(points) <= 50000 and k <= 50):
+        kmeans = skl_cluster.KMeans(n_clusters=k, max_iter=100, tol=1e-5)
+    else:
+        batchSize = int(np.clip(k * 4, 1024, 4096))
+        kmeans = skl_cluster.MiniBatchKMeans(n_clusters=k,
+                                             batch_size=batchSize,
+                                             max_no_improvement=40 if k > 100 else 15,
+                                             reassignment_ratio=0.05)
+
+    return kmeans.fit(points).cluster_centers_
+
+
+def getClusterCenterGPU(points: npt.NDArray[np.double], k: int) -> Optional[npt.NDArray[np.double]]:
+    try:
+        from cuml.cluster import KMeans as cuKMeans
+    except ModuleNotFoundError:
+        return None
+    points = np.ascontiguousarray(points)
+    try:
+        free_bytes, _ = xp.cuda.runtime.memGetInfo()
+
+        # Keep half of currently free VRAM as headroom for other allocations.
+        budget = free_bytes // 2
+
+        # cuML's distance workspace is proportional to
+        # max_samples_per_batch * k. Reserve only part of the budget for it.
+        distance_batch = min(32768, len(points), budget // max(1, 2 * points.dtype.itemsize * k))
+
+        # Keep the host-to-device input buffer bounded too.
+        input_batch = min(len(points), budget // max(1, 2 * 3 * points.dtype.itemsize))
+
+        # Very small batches can be inefficient; use CPU MiniBatch instead
+        # when even the minimum GPU batch would exceed the chosen budget.
+        if distance_batch < 256 or input_batch < 256:
+            return None
+
+        kmeans = cuKMeans(n_clusters=k, max_iter=100, tol=1e-5,
+                          init="scalable-k-means++", n_init="auto",
+                          max_samples_per_batch=int(distance_batch), device_buffer_samples=int(input_batch),
+                          output_type="numpy")
+        return to_numpy(kmeans.fit(points).cluster_centers_)
+    except (MemoryError, xp.cuda.memory.OutOfMemoryError):
+        gc.collect()
+        try:
+            xp.cuda.runtime.deviceSynchronize()
+        except Exception:
+            pass
+    except Exception as exc:
+        # Some CUDA/RAPIDS versions report OOM as RuntimeError.
+        message = str(exc).lower()
+        if "out of memory" in message or "memoryallocation" in message:
+            gc.collect()
+            return None
+        raise
+
+
 def connectSkeletons(trunk: Branch,
                      skeletons: List[List[Branch]],
                      resolution: float,
@@ -131,6 +195,9 @@ def connectSkeletons(trunk: Branch,
 
     while skeletons:
         newBranches = [b for b in breadthFirstSearch(newStartBranch) if b is not trunk]
+        if len(newBranches) == 0:
+            warnings.warn("Connected tree only consists if a single branch at start if extension")
+            newBranches = [trunk]
         for branch in newBranches:
             branch.interpolate(resolution, temporary=True)
         skeletonPoints = np.concatenate([b.skeletonPoints for b in newBranches], axis=0)

@@ -1,11 +1,10 @@
-import cupy as cp
 import numpy as np
 import numpy.typing as npt
 from scipy.spatial import KDTree
 from scipy.stats import ttest_ind
 
 from typing import List, Literal, Optional, Tuple
-
+from src.utils.gpuAcceleration import array_module
 
 USE_FAST_STRIP_POINT_DISTANCES = False
 
@@ -18,19 +17,22 @@ def setFastStripPointDistances(enabled: bool) -> None:
 def angle(directions_a: npt.NDArray,
           directions_b: npt.NDArray,
           vectorsAreNormalized: bool = True) -> npt.NDArray:
-    # TODO: compare to torch vecdot
+    xp = array_module(directions_a, directions_b)
+    directions_a, directions_b = xp.asarray(directions_a), xp.asarray(directions_b)
     if not vectorsAreNormalized:
         directions_a = normalizeVectors(directions_a)
         directions_b = normalizeVectors(directions_b)
-    cos = np.vecdot(directions_a, directions_b)
-    cos = np.clip(cos, -1.0, 1.0)
-    return np.arccos(cos)
+    cos = xp.vecdot(directions_a, directions_b)
+    cos = xp.clip(cos, -1.0, 1.0)
+    return xp.arccos(cos)
 
 
 def distanceAlongDirection(startPoints: npt.NDArray[np.double],
                            endPoints: npt.NDArray[np.double],
                            direction: npt.NDArray[np.double]) -> npt.NDArray[np.double]:
-    return np.vecdot(endPoints - startPoints, direction)
+    xp = array_module(startPoints, endPoints, direction)
+    startPoints, endPoints, direction = xp.asarray(startPoints), xp.asarray(endPoints), xp.asarray(direction)
+    return xp.vecdot(endPoints - startPoints, direction)
 
 
 def findClosestCylinders(axisStarts: npt.NDArray[np.double],
@@ -84,9 +86,10 @@ def getStripAngles(strip: npt.NDArray[np.double]) -> Optional[npt.NDArray[np.dou
 
 
 def getValueOccurrences(array: npt.NDArray[np.intp|int]) -> List[Tuple[int, npt.NDArray[np.intp]]]:
+    xp = array_module(array)
     occurrences = []
-    order = np.argsort(array)
-    values, indices, counts = np.unique(array[order], return_index=True, return_counts=True)
+    order = xp.argsort(array)
+    values, indices, counts = xp.unique(array[order], return_index=True, return_counts=True)
     for v, i, c in zip(values, indices, counts):
         occurrences.append((v, order[i:i+c]))
 
@@ -97,8 +100,10 @@ def cylinderPointsDistance(axisStarts: npt.NDArray[np.double],
                            axisEnds: npt.NDArray[np.double],
                            radius: float,
                            points: npt.NDArray[np.double]) -> float:
+    xp = array_module(axisStarts, axisEnds, points)
+    axisStarts, axisEnds, points = xp.asarray(axisStarts), xp.asarray(axisEnds), xp.asarray(points)
     axisDistances = linesPointsDistances(axisStarts, axisEnds, points)
-    return np.abs(axisDistances - radius)
+    return xp.abs(axisDistances - radius)
 
 
 def movingTTest(sequence: npt.NDArray[np.double]) -> Optional[int]:
@@ -123,7 +128,7 @@ def movingTTest(sequence: npt.NDArray[np.double]) -> Optional[int]:
 
 
 def normalizeVectors(vectors: npt.NDArray):
-    xp = cp.get_array_module(vectors)
+    xp = array_module(vectors)
     return vectors / xp.expand_dims(xp.linalg.norm(vectors, axis=-1), axis=-1)
 
 
@@ -155,7 +160,8 @@ def queryPointsNearSegment(lookUp: KDTree,
 def pointSort(points: npt.NDArray,
               order: Tuple[Literal['x', 'y', 'z'], Literal['x', 'y', 'z'], Literal['x', 'y', 'z']] = ('x', 'y', 'z')
               ) -> npt.NDArray:
-    return np.sort(points.view([('x', points.dtype), ('y', points.dtype), ('z', points.dtype)]).squeeze(-1),
+    xp = array_module(points)
+    return xp.sort(points.view([('x', points.dtype), ('y', points.dtype), ('z', points.dtype)]).squeeze(-1),
                    order=order).view((points.dtype, 3))
 
 
@@ -163,7 +169,8 @@ def linesPointsDistances(lineStartPoints: npt.NDArray, # (L,D)
                          lineEndPoints: npt.NDArray, # (L,D) or (D)
                          points: npt.NDArray, # (N,D)
                          ) -> npt.NDArray | Tuple[npt.NDArray, npt.NDArray]:
-    xp = cp.get_array_module(lineStartPoints, lineEndPoints, points)
+    xp = array_module(lineStartPoints, lineEndPoints, points)
+    lineStartPoints, lineEndPoints, points = xp.asarray(lineStartPoints), xp.asarray(lineEndPoints), xp.asarray(points)
     lineVectors = lineStartPoints - lineEndPoints # (L,D)
 
     pointsToLineStartPoints = lineStartPoints[:,xp.newaxis] - points # (L,N,D)
@@ -192,7 +199,8 @@ def stripPointsDistances(strip: npt.NDArray,  # (L+1,D)
     if len(strip) < 2:
         raise ValueError('Strip must have at least 2 points')
 
-    xp = cp.get_array_module(strip)
+    xp = array_module(strip, points)
+    strip, points = xp.asarray(strip), xp.asarray(points)
     segmentVectors = strip[1:] - strip[:-1]
     if xp.any(xp.all(segmentVectors == 0, axis=1)):
         raise ValueError('Strip must not contain zero-length segments')
@@ -219,30 +227,31 @@ def _stripPointsDistancesWithInfo(strip: npt.NDArray,
         raise ValueError('Strip must have at least 2 points')
     if maxBatchSize <= 0:
         raise ValueError("maxBatchSize must be greater than zero")
-    xp = cp.get_array_module(strip, points)
+    xp = array_module(strip, points)
+    strip, points = xp.asarray(strip), xp.asarray(points)
     segmentStarts = strip[:-1]
     segmentEnds = strip[1:]
     segmentVectors = segmentStarts - segmentEnds # (L,D)
 
-    distances = np.empty(len(points), dtype=np.double)
-    pedalPoints = np.empty_like(points, dtype=np.double)
-    closestSegments = np.empty(len(points), dtype=np.intp)
-    trimmed = np.zeros(len(points), dtype=np.bool)
+    distances = xp.empty(len(points), dtype=np.double)
+    pedalPoints = xp.empty_like(points, dtype=np.double)
+    closestSegments = xp.empty(len(points), dtype=np.intp)
+    trimmed = xp.zeros(len(points), dtype=np.bool)
 
     for start in range(0, len(points), maxBatchSize):
         b = slice(start, min(start + maxBatchSize, len(points)))
 
-        pointsToSegmentStarts = segmentStarts - points[b,np.newaxis] # (N,L,D)
-        projection = np.vecdot(pointsToSegmentStarts, segmentVectors) / np.vecdot(segmentVectors, segmentVectors) # (N,L)
+        pointsToSegmentStarts = segmentStarts - points[b,xp.newaxis] # (N,L,D)
+        projection = xp.vecdot(pointsToSegmentStarts, segmentVectors) / xp.vecdot(segmentVectors, segmentVectors) # (N,L)
         clippedProjection = xp.clip(projection, 0.0, 1.0)
         potentialPedalPoints = segmentStarts[xp.newaxis] - clippedProjection[:,:,xp.newaxis] * segmentVectors[xp.newaxis] # (N,L,D)
 
-        segmentDistances: npt.NDArray = xp.linalg.norm(potentialPedalPoints - points[b,np.newaxis], axis=-1) # (N,L)
+        segmentDistances: npt.NDArray = xp.linalg.norm(potentialPedalPoints - points[b,xp.newaxis], axis=-1) # (N,L)
         closestSegments[b] = segmentDistances.argmin(axis=-1) # (N)
-        distances[b] = np.take_along_axis(segmentDistances, closestSegments[b,np.newaxis], axis=-1).squeeze() # (N)
+        distances[b] = xp.take_along_axis(segmentDistances, closestSegments[b,xp.newaxis], axis=-1).squeeze() # (N)
 
         if returnPedalInfo:
-            pedalPoints[b] = np.take_along_axis(potentialPedalPoints, closestSegments[b,np.newaxis,np.newaxis], axis=1).squeeze() # (N,D)
+            pedalPoints[b] = xp.take_along_axis(potentialPedalPoints, closestSegments[b,xp.newaxis,xp.newaxis], axis=1).squeeze() # (N,D)
         if trimStart:
             trimmed[b] |= (closestSegments[b] == 0) & (projection[:,0] < 0)
         if trimEnd:
@@ -274,7 +283,8 @@ def _stripPointDistancesOnly(strip: npt.NDArray,
     if maxBatchSize <= 0:
         raise ValueError("maxBatchSize must be greater than zero")
 
-    xp = cp.get_array_module(strip, points)
+    xp = array_module(strip, points)
+    strip, points = xp.asarray(strip), xp.asarray(points)
     segmentStarts = strip[:-1]
     segmentVectors = strip[1:] - segmentStarts
     segmentLengthsSquared = xp.sum(segmentVectors * segmentVectors, axis=1)
@@ -317,18 +327,3 @@ def _stripPointDistancesOnly(strip: npt.NDArray,
     if returnTrimming:
         return distances, trimmed
     return distances[~trimmed]
-
-
-def skewLinesDistance(a1: npt.NDArray[np.double], b1: npt.NDArray[np.double], # 2 points on first line
-                      a2: npt.NDArray[np.double], b2: npt.NDArray[np.double] # 2 points on second line
-                      ) -> float: # lines are defined by 2 points (a, b) on the line
-    line1Vector = a2 - a1
-    line2Vector = b2 - b1
-    normalVector = np.cross(line1Vector, line2Vector)
-    connectionVector = a2 - a1
-
-    normalLength = np.linalg.norm(normalVector)
-    if np.isclose(normalLength, 0): # vectors are parallel
-        return np.linalg.norm(np.cross(connectionVector, line1Vector)) / np.linalg.norm(line1Vector)
-    else:
-        return np.abs(np.dot(connectionVector, normalVector)) / normalLength
