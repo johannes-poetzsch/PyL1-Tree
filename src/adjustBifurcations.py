@@ -65,20 +65,22 @@ def applyAdjustment(stem: Branch,
         adjustmentBranchIdx = associatedBranches.index(adjustmentBranch)
         del(associatedBranches[adjustmentBranchIdx])
         del(originalDistances[adjustmentBranchIdx])
-        unassignedPoints = adjustmentBranch.remove()
+        unassignedPoints = adjustmentBranch.remove(adjustConnectedBranches=False)
 
     branches = list(breadthFirstSearch(stem))
-    Branch.reassignPoints(branches, associatedBranches, originalDistances=originalDistances, useTrimming=False)
+    Branch.reassignPoints(branches, None, associatedBranches, originalDistances, useTrimming=False)
 
     if unassignedPoints is not None and len(unassignedPoints) > 0:
         Branch.assignLocalPoints(unassignedPoints, branches, closeBranches=associatedBranches, useTrimming=False)
 
+    if parentOfNewBifurcation is not None and len(parentOfNewBifurcation.children) == 1:
+        parentOfNewBifurcation.expand()
     return parentOfNewBifurcation
 
 
 def determineAdjustment(associatedBranches: List[Branch],
                         parentBranch: Branch,
-                        tlsPoints: npt.NDArray[cp.double],
+                        tlsPoints: npt.NDArray[np.double],
                         resolution: float,
                         minAngleThreshold: float,
                         maxAngleThreshold: float
