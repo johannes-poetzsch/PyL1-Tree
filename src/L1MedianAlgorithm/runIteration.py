@@ -1,9 +1,8 @@
-from typing import Any, List, Optional, Tuple
 from multiprocessing import shared_memory
-
 import numpy as np
 import numpy.typing as npt
 from scipy.spatial import KDTree
+from typing import Any, List, Optional, Tuple
 
 from src.utils.pointMetrics import decayingWeights, setWorkerTLSLookUp
 

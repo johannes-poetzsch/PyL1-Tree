@@ -1,6 +1,5 @@
 import numpy as np
 import numpy.typing as npt
-from cupyx.scipy.spatial import distance
 from scipy.spatial import KDTree
 from typing import List, Optional, Tuple
 

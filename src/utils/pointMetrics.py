@@ -1,6 +1,5 @@
 import sys
-from multiprocessing import shared_memory
-from multiprocessing import get_context
+from multiprocessing import shared_memory, get_context
 
 import numpy as np
 import numpy.typing as npt
