@@ -9,8 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from src.objects.branch import Branch
 from src.utils.geometry import linesPointsDistances, normalizeVectors, angle
 from src.utils.iteration import breadthFirstSearch
-from src.utils.gpuAcceleration import array_module
-from src.utils.gpuAcceleration import to_numpy
+from src.utils import gpuAcceleration
 
 
 def adjustBifurcations(trunk: Branch, parameters: Dict[str, Any]):
@@ -140,7 +139,38 @@ def getDistanceMetrics(tlsPoints: npt.NDArray[np.double],
                        isCredible: Dict[Branch, npt.NDArray],
                        maxBatchSize: int = 1024
                        ) -> Tuple[Dict[Branch, npt.NDArray[np.double]], Dict[Branch, npt.NDArray[np.double]], Dict[Branch, npt.NDArray[np.double]]]:
-    xp = array_module(tlsPoints)
+    useGPU = gpuAcceleration.gpuEnabled
+    xp = gpuAcceleration.xp
+    # The GPU distance path keeps one distance matrix per branch,
+    # plus scratch matrices for the current distance calculation and the stacked candidate bifurcation distances.
+    # Estimate that peak before selecting a batch size.
+    if useGPU:
+        segmentCounts = {b: max(0, len(branchSkeletonPoints[b]) - 1) for b in branches}
+        totalSegments = sum(segmentCounts.values())
+        maxSegments = max(segmentCounts.values(), default=0)
+        maxNewBifurcationSegments = max((np.count_nonzero(isCredible[b]) * (len(branches) - 1) for b in branches), default=0)
+        totalDistancePairs = len(tlsPoints) * (totalSegments + maxNewBifurcationSegments)
+
+        # Small workloads are usually faster on CPU once GPU launch and transfer overhead are included.
+        if totalDistancePairs < 100000:
+            useGPU = False
+        else:
+            freeBytes, _ = xp.cuda.runtime.memGetInfo()
+            # Keep half the currently free VRAM as headroom. The estimate counts retained per-branch results,
+            # the candidate stack, and conservative scratch space for line-point distance calculations.
+            bytesPerPoint = tlsPoints.dtype.itemsize * (totalSegments + 3 * maxNewBifurcationSegments + 18 * maxSegments)
+            gpuBatchSize = min(len(tlsPoints), (freeBytes // 2) // max(1, bytesPerPoint))
+            if gpuBatchSize < 256:
+                useGPU = False
+            else:
+                batches = (xp.asarray(tlsPoints[start:start + gpuBatchSize])
+                           for start in range(0, len(tlsPoints), gpuBatchSize))
+
+    if not useGPU:
+        xp = np
+        batchCount = max(1, np.ceil(len(tlsPoints) / maxBatchSize).astype(np.intp))
+        batches = iter(np.array_split(tlsPoints, batchCount))
+
     branchSkeletonPoints = {b: xp.asarray(p) for b, p in branchSkeletonPoints.items()}
     isCredible = {b: xp.asarray(c) for b, c in isCredible.items()}
 
@@ -149,16 +179,19 @@ def getDistanceMetrics(tlsPoints: npt.NDArray[np.double],
     distancesToNewBifurcationSums = {b: xp.double(0) for b in branches}
     associatedTlsCounts = {b: xp.intp(0) for b in branches}
 
-    batchCount = max(1, np.ceil(len(tlsPoints) / maxBatchSize).astype(np.intp))
-    for batchIdx, batchPoints in enumerate(np.array_split(tlsPoints, batchCount)):
+    for batchPoints in batches:
         originalDistances = {b: linesPointsDistances(branchSkeletonPoints[b][:-1],
                                                      branchSkeletonPoints[b][1:],
                                                      batchPoints) for b in branches}
 
-        firstSegmentDistances = {b: xp.min(originalDistances[b][:bifurcationAdjacentIndices[b]], axis=0)
-                                 for b in branches}
-        restBranchDistances = {b: xp.min(originalDistances[b][bifurcationAdjacentIndices[b]:], axis=0, initial=np.inf)
-                               for b in branches}
+        firstSegmentDistances = {b: xp.min(originalDistances[b][:bifurcationAdjacentIndices[b]], axis=0) for b in branches}
+        restBranchDistances = {}
+        for b in branches:
+            restDistances = originalDistances[b][bifurcationAdjacentIndices[b]:]
+            if len(restDistances) == 0:
+                restBranchDistances[b] = xp.full(len(batchPoints), xp.inf, dtype=originalDistances[b].dtype)
+            else:
+                restBranchDistances[b] = xp.min(restDistances, axis=0)
 
         for targetBranch in branches:
             otherBranches = [b for b in branches if b is not targetBranch]
@@ -169,25 +202,29 @@ def getDistanceMetrics(tlsPoints: npt.NDArray[np.double],
                 continue
 
             distancesToNewBifurcation = xp.min(xp.stack(
-                [linesPointsDistances(targetPoints[1:][tIsCredible], b[1], batchPoints)
+                [linesPointsDistances(targetPoints[1:][tIsCredible], xp.asarray(b[1]), batchPoints)
                  for b in otherBranches]),
                 axis=0)
 
-            # cupy does not currently support minimum.accumulate, so this method can only run on cpu
-            # if this method is ever added to cupy, this code can be used on the with cupy
-            distancesUntilTargets = np.minimum.accumulate(targetDistances, axis=0)
+            # cupy does not currently support minimum.accumulate (yet)
+            if useGPU:
+                distancesUntilTargets = gpuAcceleration.xdf(targetDistances).cummin(axis=0).to_cupy()
+            else:
+                distancesUntilTargets = np.minimum.accumulate(targetDistances, axis=0)
             distancesToRemovedSegments = xp.minimum(distancesUntilTargets[tIsCredible], xp.min(
                 xp.stack([firstSegmentDistances[b] for b in otherBranches]), axis=0))
             del distancesUntilTargets
 
-
-            distancesFromTargets = xp.flipud(xp.minimum.accumulate(xp.flipud(targetDistances)))
+            if useGPU:
+                distancesFromTargets = xp.flipud(gpuAcceleration.xdf(xp.flipud(targetDistances)).cummin(axis=0).to_cupy())
+            else:
+                distancesFromTargets = xp.flipud(xp.minimum.accumulate(xp.flipud(targetDistances)))
             del targetDistances
             distancesFromTargets = xp.roll(distancesFromTargets, -1, axis=0)
             distancesFromTargets[-1] = xp.inf
 
-            distancesToUnaffectedSegments = xp.minimum(distancesFromTargets[tIsCredible], xp.minimum.reduce(
-                [restBranchDistances[b] for b in otherBranches], axis=0))
+            distancesToUnaffectedSegments = xp.minimum(distancesFromTargets[tIsCredible], xp.min(
+                xp.asarray([restBranchDistances[b] for b in otherBranches]), axis=0))
             del distancesFromTargets
 
             isAtBifurcation = xp.logical_or(distancesToRemovedSegments < distancesToUnaffectedSegments,
@@ -198,10 +235,15 @@ def getDistanceMetrics(tlsPoints: npt.NDArray[np.double],
             distancesToNewBifurcationSums[targetBranch] += xp.sum(xp.where(isAtBifurcation, distancesToNewBifurcation, 0), axis=1)
             associatedTlsCounts[targetBranch] += xp.count_nonzero(isAtBifurcation, axis=1)
 
+    def toHost(array):
+        return gpuAcceleration.to_numpy(array) if useGPU else np.asarray(array)
+
     with np.errstate(divide='ignore', invalid='ignore'):
-        meanNewDistances = {b: to_numpy(newDistancesSums[b] / len(tlsPoints)) for b in branches}
-        meanDistancesToRemovedSegments = {b: to_numpy(distancesToRemovedSegmentsSums[b] / associatedTlsCounts[b]) for b in branches}
-        meanDistancesToNewBifurcation = {b: to_numpy(distancesToNewBifurcationSums[b] / associatedTlsCounts[b]) for b in branches}
+        meanNewDistances = {b: toHost(newDistancesSums[b] / len(tlsPoints)) for b in branches}
+        meanDistancesToRemovedSegments = {
+            b: toHost(distancesToRemovedSegmentsSums[b] / associatedTlsCounts[b]) for b in branches}
+        meanDistancesToNewBifurcation = {
+            b: toHost(distancesToNewBifurcationSums[b] / associatedTlsCounts[b]) for b in branches}
 
     return meanNewDistances, meanDistancesToRemovedSegments, meanDistancesToNewBifurcation
 

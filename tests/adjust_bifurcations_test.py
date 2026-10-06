@@ -7,6 +7,7 @@ from src.adjustBifurcations import adjustBifurcations
 from tests.global_fixtures import parameters
 from tests.test_utils.comparison import subtrees_are_equal
 from tests.test_utils.data_import import connect_branches, import_branches, rootPath
+from src.utils.gpuAcceleration import disable_gpu, enable_gpu
 
 
 @pytest.fixture
@@ -31,6 +32,12 @@ def result_branches_trunk():
     return connect_branches(branches)[0]
 
 
-def test_on_data(input_branches_trunk, result_branches_trunk, parameters):
+@pytest.mark.parametrize("gpu_enabled", [False])
+def test_on_data(input_branches_trunk, result_branches_trunk, parameters, gpu_enabled):
+    if gpu_enabled:
+        enable_gpu()
+    else:
+        disable_gpu()
     adjustBifurcations(input_branches_trunk, parameters)
+    disable_gpu()
     assert subtrees_are_equal(input_branches_trunk, result_branches_trunk, compareTlsPoints=False)

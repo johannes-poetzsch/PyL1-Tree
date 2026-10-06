@@ -4,3 +4,4 @@
 
 cupy-cuda12x
 cuml-cu12
+cudf-cu12

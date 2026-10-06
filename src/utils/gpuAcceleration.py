@@ -4,14 +4,16 @@ import scipy
 
 xp = np
 xsp = scipy
+xdf = None
 gpuEnabled = False
 
 def enable_gpu():
-    global xp, xsp, gpuEnabled
+    global xp, xsp, xdf, gpuEnabled
 
     try:
         import cupy
         import cupyx.scipy
+        import cudf
     except ModuleNotFoundError as exc:
         if exc.name in {"cupy", "cupyx"}:
             raise RuntimeError(
@@ -21,6 +23,7 @@ def enable_gpu():
 
     xp = cupy
     xsp = cupyx.scipy
+    xdf = cudf.DataFrame
     gpuEnabled = True
 
 
