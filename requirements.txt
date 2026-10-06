@@ -1,11 +1,8 @@
-cupy
-cutensor
-kneed
-matplotlib
+circle_detection
+dbscan
 networkx
-pytest
+numpy
+pandas
+PyYAML
 scikit-learn
 scipy
-yaml
-
-circle_detection
