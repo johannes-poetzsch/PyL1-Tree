@@ -1,0 +1,6 @@
+# Optional CUDA 12 acceleration; install in a compatible Linux or WSL2 environment.
+-r requirements.txt
+--extra-index-url https://pypi.nvidia.com
+
+cupy-cuda12x
+cuml-cu12
