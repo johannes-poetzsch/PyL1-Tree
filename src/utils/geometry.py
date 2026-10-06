@@ -6,12 +6,12 @@ from scipy.stats import ttest_ind
 from typing import List, Literal, Optional, Tuple
 from src.utils.gpuAcceleration import array_module
 
-USE_FAST_STRIP_POINT_DISTANCES = False
+USE_FAST_POINT_DISTANCES = False
 
 
 def setFastStripPointDistances(enabled: bool) -> None:
-    global USE_FAST_STRIP_POINT_DISTANCES
-    USE_FAST_STRIP_POINT_DISTANCES = enabled
+    global USE_FAST_POINT_DISTANCES
+    USE_FAST_POINT_DISTANCES = enabled
 
 
 def angle(directions_a: npt.NDArray,
@@ -22,7 +22,7 @@ def angle(directions_a: npt.NDArray,
     if not vectorsAreNormalized:
         directions_a = normalizeVectors(directions_a)
         directions_b = normalizeVectors(directions_b)
-    cos = xp.vecdot(directions_a, directions_b)
+    cos = xp.einsum('...d,...d->...', directions_a, directions_b)
     cos = xp.clip(cos, -1.0, 1.0)
     return xp.arccos(cos)
 
@@ -32,7 +32,7 @@ def distanceAlongDirection(startPoints: npt.NDArray[np.double],
                            direction: npt.NDArray[np.double]) -> npt.NDArray[np.double]:
     xp = array_module(startPoints, endPoints, direction)
     startPoints, endPoints, direction = xp.asarray(startPoints), xp.asarray(endPoints), xp.asarray(direction)
-    return xp.vecdot(endPoints - startPoints, direction)
+    return xp.einsum('...d,...d->...', endPoints - startPoints, direction)
 
 
 def findClosestCylinders(axisStarts: npt.NDArray[np.double],
@@ -165,22 +165,70 @@ def pointSort(points: npt.NDArray,
                    order=order).view((points.dtype, 3))
 
 
-def linesPointsDistances(lineStartPoints: npt.NDArray, # (L,D)
-                         lineEndPoints: npt.NDArray, # (L,D) or (D)
-                         points: npt.NDArray, # (N,D)
-                         ) -> npt.NDArray | Tuple[npt.NDArray, npt.NDArray]:
+def linesPointsDistances(lineStartPoints: npt.NDArray[np.double], # (L,D)
+                         lineEndPoints: npt.NDArray[np.double], # (L,D) or (D)
+                         points: npt.NDArray[np.double] # (N,D)
+                         ) -> npt.NDArray[np.double]:
     xp = array_module(lineStartPoints, lineEndPoints, points)
     lineStartPoints, lineEndPoints, points = xp.asarray(lineStartPoints), xp.asarray(lineEndPoints), xp.asarray(points)
-    lineVectors = lineStartPoints - lineEndPoints # (L,D)
+    if len(lineStartPoints) == 0:
+        return xp.empty((0, len(points)), dtype=xp.double)
+    if USE_FAST_POINT_DISTANCES:
+        return _linesPointsDistancesFast(lineStartPoints, lineEndPoints, points)
 
-    pointsToLineStartPoints = lineStartPoints[:,xp.newaxis] - points # (L,N,D)
-    # TODO: compare runtime to torch vecdot
-    tMatrix = xp.einsum('LND,LD->LN', pointsToLineStartPoints, lineVectors) / xp.einsum('LD,LD->L', lineVectors, lineVectors)[:,xp.newaxis] # (L,N)
-    del pointsToLineStartPoints
-    xp.clip(tMatrix, 0, 1, out=tMatrix)
-    pedalPoints = lineStartPoints[:,xp.newaxis] - tMatrix[:,:,xp.newaxis] * lineVectors[:,xp.newaxis] # (L,N,D)
-    del tMatrix
+    return _linesPointsDistancesReference(lineStartPoints, lineEndPoints, points)
+
+
+def _linesPointsDistancesReference(lineStartPoints: npt.NDArray,
+                                   lineEndPoints: npt.NDArray,
+                                   points: npt.NDArray
+                                   ) -> npt.NDArray:
+    xp = array_module(lineStartPoints, lineEndPoints, points)
+    lineVectors = lineStartPoints - lineEndPoints # (L,D)
+    lineLengthsSquared = xp.einsum('LD,LD->L', lineVectors, lineVectors)
+
+    pointsToLineStartPoints = lineStartPoints[:, xp.newaxis] - points # (L,N,D)
+    projection = (xp.einsum('LND,LD->LN', pointsToLineStartPoints, lineVectors)
+                  / lineLengthsSquared[:, xp.newaxis]) # (L,N)
+
+    xp.clip(projection, 0, 1, out=projection)
+    pedalPoints = (lineStartPoints[:, xp.newaxis]
+                   - projection[:, :, xp.newaxis] * lineVectors[:, xp.newaxis]) # (L,N,D)
+
     distances = xp.linalg.norm(pedalPoints - points, axis=-1) # (L,N)
+
+    return distances
+
+
+def _linesPointsDistancesFast(lineStartPoints: npt.NDArray[np.double],
+                              lineEndPoints: npt.NDArray[np.double],
+                              points: npt.NDArray[np.double]
+                              ) -> npt.NDArray[np.double]:
+    xp = array_module(lineStartPoints, lineEndPoints, points)
+    segmentVectors = lineEndPoints - lineStartPoints
+    segmentLengthsSquared = xp.sum(segmentVectors * segmentVectors, axis=1)
+
+    origin = lineStartPoints[0]
+    localStarts = lineStartPoints - origin
+    localStartLengthsSquared = xp.sum(localStarts * localStarts, axis=1)
+    localStartSegmentDots = xp.sum(localStarts * segmentVectors, axis=1)
+
+    localPoints = points - origin
+    pointLengthsSquared = xp.sum(localPoints * localPoints, axis=1)
+
+    pointStartDots = localPoints @ localStarts.T
+    pointSegmentDots = localPoints @ segmentVectors.T - localStartSegmentDots
+    startDistancesSquared = (pointLengthsSquared[xp.newaxis, :]
+                             + localStartLengthsSquared[:, xp.newaxis]
+                             - 2 * pointStartDots.T)
+
+    projection = pointSegmentDots.T / segmentLengthsSquared[:, xp.newaxis]
+    clippedProjection = xp.clip(projection, 0.0, 1.0)
+    segmentDistancesSquared = (startDistancesSquared
+                               - 2 * clippedProjection * pointSegmentDots.T
+                               + clippedProjection * clippedProjection * segmentLengthsSquared[:, xp.newaxis])
+    xp.maximum(segmentDistancesSquared, 0.0, out=segmentDistancesSquared)
+    distances = xp.sqrt(segmentDistancesSquared)
 
     return distances
 
@@ -205,7 +253,7 @@ def stripPointsDistances(strip: npt.NDArray,  # (L+1,D)
     if xp.any(xp.all(segmentVectors == 0, axis=1)):
         raise ValueError('Strip must not contain zero-length segments')
 
-    if USE_FAST_STRIP_POINT_DISTANCES and not returnPedalInfo:
+    if USE_FAST_POINT_DISTANCES and not returnPedalInfo:
         return _stripPointDistancesOnly(strip, points, trimStart, trimEnd, returnTrimming, maxBatchSize)
 
     return _stripPointsDistancesWithInfo(strip, points, trimStart, trimEnd, returnTrimming,
@@ -242,7 +290,8 @@ def _stripPointsDistancesWithInfo(strip: npt.NDArray,
         b = slice(start, min(start + maxBatchSize, len(points)))
 
         pointsToSegmentStarts = segmentStarts - points[b,xp.newaxis] # (N,L,D)
-        projection = xp.vecdot(pointsToSegmentStarts, segmentVectors) / xp.vecdot(segmentVectors, segmentVectors) # (N,L)
+        projection = (xp.einsum('NLD,LD->NL', pointsToSegmentStarts, segmentVectors)
+                      / xp.einsum('LD,LD->L', segmentVectors, segmentVectors)) # (N,L)
         clippedProjection = xp.clip(projection, 0.0, 1.0)
         potentialPedalPoints = segmentStarts[xp.newaxis] - clippedProjection[:,:,xp.newaxis] * segmentVectors[xp.newaxis] # (N,L,D)
 

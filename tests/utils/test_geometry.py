@@ -3,7 +3,9 @@ import pytest
 from scipy.spatial import KDTree
 
 from src.objects.tlsPointManager import TlsPointManager
-from src.utils.geometry import queryPointsNearSegment, setFastStripPointDistances, stripPointsDistances
+from src.utils.geometry import (linesPointsDistances, queryPointsNearSegment,
+                                setFastStripPointDistances,
+                                stripPointsDistances)
 
 
 def test_query_points_near_segment_returns_integer_indices_when_empty():
@@ -79,6 +81,35 @@ def test_fast_strip_distances_match_legacy_with_trimming():
             expected_distances[~expected_trimming],
             atol=1e-12,
         )
+    finally:
+        setFastStripPointDistances(False)
+
+
+@pytest.mark.parametrize("broadcast_end_point", [False, True])
+def test_fast_lines_points_distances_matches_reference(broadcast_end_point):
+    line_starts = np.array([
+        [100000.0, -200000.0, 300000.0],
+        [100001.0, -200000.0, 300000.0],
+        [100000.0, -199999.0, 300000.0],
+    ])
+    line_ends = (np.array([100000.0, -199999.0, 300000.0]) if broadcast_end_point else np.array([
+        [100001.0, -200000.0, 300000.0],
+        [100001.0, -199999.0, 300000.0],
+        [100000.0, -199999.0, 300001.0],
+    ]))
+    points = np.array([
+        [100000.3, -199999.8, 300000.2],
+        [100000.5, -199999.7, 300000.3],
+        [100000.8, -199999.6, 300000.1],
+    ])
+
+    setFastStripPointDistances(False)
+    expected = linesPointsDistances(line_starts, line_ends, points)
+
+    setFastStripPointDistances(True)
+    try:
+        actual = linesPointsDistances(line_starts, line_ends, points)
+        np.testing.assert_allclose(actual, expected, atol=1e-9, rtol=1e-9)
     finally:
         setFastStripPointDistances(False)
 
