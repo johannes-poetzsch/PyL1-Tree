@@ -1,5 +1,6 @@
 circle_detection
 dbscan
+laspy
 networkx
 numpy
 pandas

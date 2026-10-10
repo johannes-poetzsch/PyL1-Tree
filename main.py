@@ -4,6 +4,7 @@ import time
 from os import path
 from typing import Any, Dict
 
+import laspy
 import numpy as np
 import numpy.typing as npt
 import yaml
@@ -25,18 +26,23 @@ def main():
     args = parseArguments(sys.argv)
     inputFile = args.inputFile
     fileName, extension = path.splitext(path.basename(inputFile))
-
-    if not extension == ".txt":
-        print("Input file must be in .txt format")
-        sys.exit(1)
-
     if not path.isfile(inputFile):
         print(f"Input file \"{inputFile}\" does not exist")
         sys.exit(1)
 
-    with open(inputFile) as file:
-        tlsPoints = np.loadtxt(file, dtype=np.double, delimiter=args.delimiter, comments=["\"", "#", "/"],
-                               usecols=(1,2,3) if hasIndexColumn(inputFile, args.delimiter) else (0,1,2))
+    if extension == ".txt":
+        with open(inputFile) as file:
+            tlsPoints = np.loadtxt(file, dtype=np.double, delimiter=args.delimiter, comments=["\"", "#", "/"],
+                                   usecols=(1,2,3) if hasIndexColumn(inputFile, args.delimiter) else (0,1,2))
+    elif extension == ".las" or extension == ".laz":
+        with laspy.open(inputFile) as file:
+            las = file.read()
+            tlsPoints = np.vstack((las.x, las.y, las.z), dtype=np.double).transpose()
+    else:
+        print(f"File extension \"{extension}\" not supported")
+        sys.exit(1)
+
+
     with open(args.parameters) as paramFile:
         parameters = yaml.safe_load(paramFile)["parameters"]
 

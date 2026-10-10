@@ -12,7 +12,7 @@ def test_find_base(tls_points, base_point, base_radius):
     expected_base_point = base_point
     expected_base_radius = base_radius
 
-    result_base_point, result_base_radius = findBase(tls_points[:-1])
+    result_base_point, result_base_radius, _ = findBase(tls_points[:-1])
 
     assert result_base_radius == pytest.approx(expected_base_radius)
     np.testing.assert_array_almost_equal(result_base_point, expected_base_point, decimal=12)
