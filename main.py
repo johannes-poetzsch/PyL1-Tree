@@ -112,26 +112,25 @@ def createQSM(tlsPoints: npt.NDArray[np.double],
 
     print(f"adjusting bifurcations (starting after {time.time()-start_time} s)")
     adjustBifurcations(trunk, parameters)
+    print(f"filtering branches (starting after {time.time() - start_time} s)")
     prunedTlsPoints2 = filterTreeBranches(trunk, parameters)
     prunedTlsPoints = np.concatenate((prunedTlsPoints1, prunedTlsPoints2), axis=0)
 
     print(f"smoothing branches (starting after {time.time()-start_time} s)")
     unassignedTlsPoints = smoothBranches(trunk, tlsPoints, prunedTlsPoints, parameters, workers)
 
-    #if len(unassignedTlsPoints) < len(tlsPoints) / 2:
     print(f"extending skeleton (starting after {time.time()-start_time} s)")
     extendSkeleton(trunk, unassignedTlsPoints, parameters)
 
     print(f"adjusting bifurcations (starting after {time.time()-start_time} s)")
     adjustBifurcations(trunk, parameters)
+    print(f"filtering branches (starting after {time.time() - start_time} s)")
     filterByLength(trunk, parameters["branchSizeThreshold"], parameters["resolution"])
+    print(f"cleaning up branches (starting after {time.time() - start_time} s)")
     cleanUpBranches(trunk, unassignedTlsPoints)
-    #else:
-    #    warnings.warn("Most of the point cloud could not be modeled.")
 
     print(f"constructing tree model (starting after {time.time()-start_time} s)")
     cylinders = constructTreeModel(trunk)
-    #exportModel(trunk, branchRadii, radiusIsCredible, "Results/Tree_1.csv")
     print(f"total time: {time.time()-start_time} s")
     return cylinders
 
