@@ -1,6 +1,6 @@
 circle_detection
 dbscan
-laspy
+laspy[lazrs]
 networkx
 numpy
 pandas
