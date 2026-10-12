@@ -1,6 +1,6 @@
 import numpy as np
 import numpy.typing as npt
-from typing import Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from src.utils.circleAnalysis import circumferentialCompletenessIndex, fitCircle
 from src.utils.dataAnalysis import hysteresisScan, rollingMedianSmooth
@@ -14,7 +14,8 @@ def findBaseWithoutStump(tlsPoints: npt.NDArray[np.double],
                          highThresholdFraction: float = 0.85,
                          lowThresholdFraction: float = 0.8,
                          smoothWindow: int = 3,
-                         comfirmSlices: int = 8
+                         comfirmSlices: int = 8,
+                         analytics: Optional[Dict[str, Any]] = None
                          ) -> Tuple[Optional[npt.NDArray[np.double]], Optional[float], npt.NDArray[np.double]]:
     minHeight = np.min(tlsPoints[:,2])
     treeHeight = np.quantile(tlsPoints[:, 2], 0.99) - minHeight
@@ -34,12 +35,18 @@ def findBaseWithoutStump(tlsPoints: npt.NDArray[np.double],
     if newMinHeight is None:
         return None, None, tlsPoints
 
+    removedHeight = newMinHeight - minHeight
+    remainingTlsPoints = tlsPoints[tlsPoints[:,2] > newMinHeight]
+    if analytics is not None:
+        analytics["stump_removed_height_m"] = removedHeight
+        analytics["stump_removed_point_count"] = len(tlsPoints) - len(remainingTlsPoints)
+
     smoothedRadii, centerPoints = smoothedRadii[minIdx:], centerPoints[minIdx:]
     baseRadius = smoothedRadii[np.argmin(np.isnan(smoothedRadii))]
     basePoint = centerPoints[np.argmin(np.any(np.isnan(centerPoints), axis=1))]
 
-    print("Removed bottom", newMinHeight - minHeight, "m from the base.")
-    return basePoint, baseRadius, tlsPoints[tlsPoints[:,2] > newMinHeight]
+    print("Removed bottom", removedHeight, "m from the base.")
+    return basePoint, baseRadius, remainingTlsPoints
 
 
 def computeSliceProfile(points: npt.NDArray[np.double],

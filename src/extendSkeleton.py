@@ -1,4 +1,5 @@
 import gc
+import time
 import warnings
 from collections import deque
 from dbscan import DBSCAN
@@ -19,15 +20,23 @@ from src.utils.iteration import breadthFirstSearch
 
 def extendSkeleton(trunk: Branch,
                    unassignedTlsPoints: npt.NDArray[np.double],
-                   parameters: Dict[str, Any]
+                   parameters: Dict[str, Any],
+                   analytics: Dict[str, Any] | None = None
                    ) -> npt.NDArray[np.double]:
+    stageStart = time.perf_counter()
     clusters = getClusters(unassignedTlsPoints,
                            radius=trunk.getDistances(trunk.tlsPoints).mean() / 2,
-                           minClusterSize=parameters["branchSizeThreshold"] ** 2)
+                           minClusterSize=parameters["branchSizeThreshold"] ** 2,
+                           analytics=analytics)
+    if analytics is not None:
+        analytics["time_cluster_detection_and_filtering_s"] = time.perf_counter() - stageStart
+        analytics["cluster_count_after_filtering"] = len(clusters)
+        analytics["largest_cluster_size_after_filtering"] = max((len(cluster) for cluster in clusters), default=0)
 
     skeletonPoints = np.concatenate([b.skeletonPoints for b in list(breadthFirstSearch(trunk))], axis=0)
     skeletonLookUp = KDTree(skeletonPoints)
     newSkeletons = []
+    stageStart = time.perf_counter()
     for cluster in clusters:
         clusterPoints = unassignedTlsPoints[cluster]
         skeleton = generateSkeleton(clusterPoints, skeletonLookUp, parameters["resolution"],
@@ -37,10 +46,20 @@ def extendSkeleton(trunk: Branch,
         if skeleton is not None:
             newSkeletons.append(skeleton)
 
+    if analytics is not None:
+        analytics["time_cluster_skeleton_generation_s"] = time.perf_counter() - stageStart
+        analytics["generated_cluster_skeleton_count"] = len(newSkeletons)
+
+    stageStart = time.perf_counter()
     connectSkeletons(trunk, newSkeletons, parameters["resolution"], parameters["maxDistanceThreshold"])
+    if analytics is not None:
+        analytics["time_cluster_skeleton_connection_s"] = time.perf_counter() - stageStart
 
     # could be improved by assigning clusters first
+    stageStart = time.perf_counter()
     prunedTlsPoints = Branch.reassignPoints(list(breadthFirstSearch(trunk)), useTrimming=True)
+    if analytics is not None:
+        analytics["time_extension_point_reassignment_s"] = time.perf_counter() - stageStart
 
     return prunedTlsPoints
 
@@ -48,13 +67,26 @@ def extendSkeleton(trunk: Branch,
 def getClusters(unassignedTlsPoints: npt.NDArray[np.double],
                 radius: np.double,
                 minClusterSize: int,
-                keptPercentage: int = 0.99
+                keptPercentage: int = 0.99,
+                analytics: Dict[str, Any] | None = None
                 ) -> List[npt.NDArray[np.intp]]:
     print("clustering", len(unassignedTlsPoints), "points")
+    dbscanStart = time.perf_counter()
     clusterLabels, _ = DBSCAN(unassignedTlsPoints, eps=radius, min_samples=5)
+    if analytics is not None:
+        analytics["time_dbscan_clustering_s"] = time.perf_counter() - dbscanStart
     clusters = [indices for label, indices in getValueOccurrences(clusterLabels) if label >= 0]
 
     clusterSizes = [len(c) for c in clusters]
+    clusteredPointCount = sum(clusterSizes)
+    noisePointCount = len(unassignedTlsPoints) - clusteredPointCount
+    if analytics is not None:
+        inputPointCount = len(unassignedTlsPoints)
+        analytics["cluster_count_before_filtering"] = len(clusters)
+        analytics["cluster_point_count_before_filtering"] = clusteredPointCount
+        analytics["cluster_noise_point_count"] = noisePointCount
+        analytics["cluster_noise_fraction_of_input"] = noisePointCount / inputPointCount if inputPointCount else 0.0
+
     maxRemovedCount = (1 - keptPercentage) * sum(clusterSizes)
 
     removedCount = 0
@@ -65,7 +97,18 @@ def getClusters(unassignedTlsPoints: npt.NDArray[np.double],
         if removedCount > maxRemovedCount:
             break
 
-    return [c for c in clusters if len(c) >= minClusterSize]
+    filteredClusters = [c for c in clusters if len(c) >= minClusterSize]
+    if analytics is not None:
+        retainedPointCount = sum(len(cluster) for cluster in filteredClusters)
+        excludedByFiltering = clusteredPointCount - retainedPointCount
+        analytics["cluster_point_count_after_filtering"] = retainedPointCount
+        analytics["cluster_points_excluded_by_filtering"] = excludedByFiltering
+        analytics["cluster_excluded_fraction_of_input"] = (
+            excludedByFiltering / inputPointCount if inputPointCount else 0.0)
+        analytics["cluster_noise_or_excluded_fraction_of_input"] = (
+            (noisePointCount + excludedByFiltering) / inputPointCount if inputPointCount else 0.0)
+
+    return filteredClusters
 
 
 def generateSkeleton(tlsPoints: npt.NDArray[np.double], 

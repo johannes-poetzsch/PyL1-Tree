@@ -17,11 +17,13 @@ from src.utils.geometry import getValueOccurrences, pointSort
 def generateSeeds(tlsPoints: npt.NDArray[np.double], # must be sorted by height and tlsPoints[:,2] must be height
                   parameters: Dict[str, Any],
                   useStumpRemoval: bool = False,
-                  useRansac: bool = False):
+                  useRansac: bool = False,
+                  analytics: Optional[Dict[str, Any]] = None):
     tlsPoints = np.unique(tlsPoints, axis=0)
     tlsPoints = pointSort(tlsPoints, ('z','x','y'))
 
-    basePoint, baseRadius, tlsPoints = findBase(tlsPoints, useStumpRemoval, parameters["resolution"], useRansac)
+    basePoint, baseRadius, tlsPoints = findBase(tlsPoints, useStumpRemoval, parameters["resolution"], useRansac,
+                                                analytics=analytics)
     basePointIndex = len(tlsPoints)
     tlsPoints = np.append(tlsPoints, basePoint[np.newaxis], axis=0)
 
@@ -45,12 +47,17 @@ def generateSeeds(tlsPoints: npt.NDArray[np.double], # must be sorted by height 
 def findBase(tlsPoints: npt.NDArray[np.double], # sorted by height
              removeStump: bool = False,
              resolution: float = 0.3,
-             useRansac: bool = False
+             useRansac: bool = False,
+             analytics: Optional[Dict[str, Any]] = None
              ) -> Tuple[npt.NDArray[np.double], float, npt.NDArray[np.double]]:
     if removeStump:
-        basePoint, baseRadius, tlsPoints = findBaseWithoutStump(tlsPoints, resolution, useRansac=useRansac)
+        basePoint, baseRadius, tlsPoints = findBaseWithoutStump(tlsPoints, resolution, useRansac=useRansac,
+                                                                analytics=analytics)
         if baseRadius is not None:
             return basePoint, baseRadius, tlsPoints
+        if analytics is not None and "stump_removed_point_count" not in analytics:
+            analytics["stump_removed_point_count"] = 0
+            analytics["stump_removed_height_m"] = 0.0
 
     bottomPoints = tlsPoints[:len(tlsPoints)//100]
     mins = np.quantile(bottomPoints, 0.05, axis=0, method="hazen")
@@ -75,8 +82,8 @@ def generateInitialSeeds(tlsPoints: npt.NDArray[np.double],
     #neighborGraph = buildNeighborGraph(tlsKDTree, kNeighbors)
     neighborGraph = buildConnectedGraph(tlsPoints, basePointIndex, kNeighbors)
 
-    isConnected, relPathLocation, predecessors = getPathData(neighborGraph, basePointIndex)
-    tlsPoints, relPathLocation = tlsPoints[isConnected], relPathLocation[isConnected]
+    isConnected, relPathPosition, predecessors = getPathData(neighborGraph, basePointIndex)
+    tlsPoints, relPathPosition = tlsPoints[isConnected], relPathPosition[isConnected]
 
     idxShift = np.empty(len(predecessors), dtype=np.intp)
     idxShift[isConnected] = np.arange(len(tlsPoints))
@@ -87,14 +94,14 @@ def generateInitialSeeds(tlsPoints: npt.NDArray[np.double],
     isSeed = np.zeros(len(tlsPoints), dtype=np.bool)
     tlsKDTree = KDTree(tlsPoints)
 
-    for seed in np.argsort(relPathLocation, kind="stable"):
+    for seed in np.argsort(relPathPosition, kind="stable"):
         if isConsidered[seed]:
             continue
 
         while not isSeed[seed]:
             isSeed[seed] = True
 
-            searchRange = max(2 * baseRadius * np.sqrt(relPathLocation[seed]), 2 * initialSearchRange)
+            searchRange = max(2 * baseRadius * np.sqrt(relPathPosition[seed]), 2 * initialSearchRange)
             neighborIndices = tlsKDTree.query_ball_point(tlsPoints[seed], searchRange)
 
             isConsidered[neighborIndices] = True
@@ -104,7 +111,7 @@ def generateInitialSeeds(tlsPoints: npt.NDArray[np.double],
             seed = predecessors[seed]
 
     seedIndices = np.flatnonzero(isSeed)
-    return tlsPoints, seedIndices, relPathLocation
+    return tlsPoints, seedIndices, relPathPosition
 
 
 def filterSeeds(tlsPoints: npt.NDArray[np.double],
@@ -252,6 +259,6 @@ def getPathData(neighborGraph: csr_array,
         pathLength[predecessors[idx]] = np.maximum(pathLength[predecessors[idx]], pathLength[idx])
 
     pathIndex = pathLength - pathIndex
-    relPathLocation = pathIndex / pathLength
+    relPathPosition = pathIndex / pathLength
 
-    return isConnected, relPathLocation, predecessors
+    return isConnected, relPathPosition, predecessors
