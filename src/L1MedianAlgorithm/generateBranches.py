@@ -14,13 +14,13 @@ from ..utils.pointMetrics import calculateDensity, prepareDensityWorker
 
 def generateBranches(tlsPoints: npt.NDArray[np.double],
                      seedPoints: npt.NDArray[np.double],
-                     relPathLocations: npt.NDArray[np.double],
+                     relPathPositions: npt.NDArray[np.double],
                      parameters: Dict[str, Any],
                      workers: int = 1,
                      useMultiProcessing: bool = True
                      ) -> Tuple[List[Branch], npt.NDArray[np.double]]:
     tlsLookUp = KDTree(tlsPoints)
-    skeletonData = initializeSkeleton(seedPoints, relPathLocations)
+    skeletonData = initializeSkeleton(seedPoints, relPathPositions)
     pool = None
     tlsSharedMemory = None
     skeletonSharedMemory = None
@@ -115,15 +115,15 @@ def _generateBranchesWithPool(tlsLookUp: KDTree,
 
 
 def initializeSkeleton(seedPoints: npt.NDArray[np.double],
-                       relPathLocations: npt.NDArray[np.double]) -> npt.NDArray:
+                       relPathPosition: npt.NDArray[np.double]) -> npt.NDArray:
     skeletonData = np.zeros(len(seedPoints),
                             dtype=[("Coords", (np.double, 3)),
-                                   ("relPathLocation", np.double),
+                                   ("relPathPosition", np.double),
                                    ("Sigma", np.double),
                                    ("isFix", np.bool_),
                                    ("isBranch", np.bool_)])
     skeletonData["Coords"] = seedPoints
-    skeletonData["relPathLocation"] = relPathLocations
+    skeletonData["relPathPosition"] = relPathPosition
 
     return skeletonData
 

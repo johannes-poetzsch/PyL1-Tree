@@ -69,7 +69,7 @@ def setIterationParameters(baseRadius: float,
 
 
 def runIteration(idx: int) -> Tuple[int, bool, np.double, Optional[npt.NDArray[np.double]], Optional[npt.NDArray[np.double]]]:
-    neighborRadius = np.maximum(2 * _searchRange, 2 * _baseRadius * _skeletonData["relPathLocation"][idx])
+    neighborRadius = np.maximum(2 * _searchRange, 2 * _baseRadius * _skeletonData["relPathPosition"][idx])
     neighbors = _skeletonLookUp.query_ball_point(_skeletonData["Coords"][idx], neighborRadius)
 
     if len(neighbors) <= 1:
@@ -98,7 +98,7 @@ def _runIterationBatch(indices: npt.NDArray[np.intp], queryWorkers: int
 
     points = _skeletonData["Coords"][indices]
     radii = np.maximum(2 * _searchRange,
-                       2 * _baseRadius * _skeletonData["relPathLocation"][indices])
+                       2 * _baseRadius * _skeletonData["relPathPosition"][indices])
     skeletonNeighbors = _skeletonLookUp.query_ball_point(points, radii, workers=queryWorkers,
                                                          return_sorted=False)
     tlsNeighbors = _tlsLookUp.query_ball_point(points, radii, workers=queryWorkers,

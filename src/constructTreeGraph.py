@@ -1,4 +1,5 @@
 from itertools import chain
+import time
 import networkx as nx
 import numpy as np
 import numpy.typing as npt
@@ -19,7 +20,8 @@ def constructTreeGraph(tlsPoints: npt.NDArray[np.double],
                        branches: List[Branch],
                        unfixedPoints: npt.NDArray[np.double],
                        parameters: Dict[str, Any],
-                       heightAttribute: int = 2
+                       heightAttribute: int = 2,
+                       analytics: Dict[str, Any] | None = None
                        ) -> Tuple[Branch, npt.NDArray[np.double]]:
     Branch.assignAllPoints(tlsPoints, branches, useTrimming=True)
     branches, _ = preFilterBranches(branches, parameters["baseRadius"])
@@ -31,14 +33,20 @@ def constructTreeGraph(tlsPoints: npt.NDArray[np.double],
     branches = list(chain.from_iterable([breadthFirstSearch(stem) for stem in componentStems]))
     trimmedPoints = Branch.assignAllPoints(tlsPoints, branches, useTrimming=True)
 
+    connectionStart = time.perf_counter()
     prunedBranches, trimmedPoints = connectComponents(
         trunk, componentStems, unfixedPoints, trimmedPoints,
         parameters["minDistanceThreshold"], parameters["maxDistanceThreshold"],
         np.deg2rad(parameters["minAngleThreshold"]), np.deg2rad(parameters["maxAngleThreshold"]),
         parameters["resolution"], parameters["windowSize"], parameters["densityFactor"])
+    if analytics is not None:
+        analytics["time_component_connection_s"] = time.perf_counter() - connectionStart
 
     trimmedPoints = addBasePoint(trunk, parameters["basePoint"], trimmedPoints)
+    filteringStart = time.perf_counter()
     prunedPoints1 = filterTreeBranches(trunk, parameters, pruneNewLeaves=True)
+    if analytics is not None:
+        analytics["time_initial_tree_branch_filtering_s"] = time.perf_counter() - filteringStart
     branches = list(breadthFirstSearch(trunk))
 
     prunedPoints2 = removeTlsPointsNearPoints(branches, unfixedPoints, parameters["resolution"])
