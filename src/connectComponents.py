@@ -38,7 +38,8 @@ def connectComponents(trunk: Branch,
 
     tlsManager = TlsPointManager(branches, unassignedPoints)
 
-    unfixedLookUp, unfixedWrapper = KDTree(unfixedPoints), Branch(unfixedPoints)
+    unfixedLookUp = KDTree(unfixedPoints)
+    unfixedWrapper = Branch(unfixedPoints) if len(unfixedPoints) > 0 else None
     potentialConnections = generatePotentialConnections(branches, unfixedLookUp, unfixedWrapper, minDistanceThreshold)
 
     originalMaxDistanceThreshold = maxDistanceThreshold
@@ -73,8 +74,12 @@ def connectComponents(trunk: Branch,
         connectionBranch, splitEnd = connectComponent(connectionComponent, unconnectedComponents, connectedComponents,
                                                       tlsManager, resolution)
 
-        updatePotentialConnections(potentialConnections, unfixedLookUp, unfixedWrapper, connectionBranch, splitEnd,
-                                   minDistanceThreshold)
+        if unfixedWrapper is not None:
+            branchesToUpdate = list(breadthFirstSearch(connectionBranch))
+            if splitEnd is not None:
+                branchesToUpdate.extend((splitEnd.parent, splitEnd))
+            updatePotentialConnections(potentialConnections, unfixedLookUp, unfixedWrapper, branchesToUpdate,
+                                       minDistanceThreshold)
 
         maxDistanceThreshold = originalMaxDistanceThreshold
 
@@ -229,16 +234,19 @@ def findContinuation(connectedComponents: Iterable[ConnectedComponent],
 
 def generatePotentialConnections(branches: List[Branch],
                                  unfixedLookUp: KDTree,
-                                 unfixedWrapper: Branch,
+                                 unfixedWrapper: Optional[Branch],
                                  minDistanceThreshold: float):
     unfixedPoints = unfixedLookUp.data
     potentialConnections = nx.Graph()
+    if unfixedWrapper is None:
+        return potentialConnections
 
     unfixedNeighbors = unfixedLookUp.query_ball_tree(unfixedLookUp, minDistanceThreshold)
     for idx, neighborIndices in enumerate(unfixedNeighbors):
         for neighborIdx in neighborIndices:
             distance = np.linalg.norm(unfixedPoints[neighborIdx] - unfixedPoints[idx])
-            potentialConnections.add_edge((unfixedWrapper, idx), (unfixedWrapper, neighborIdx), distance=distance)
+            if distance > 0:
+                potentialConnections.add_edge((unfixedWrapper, idx), (unfixedWrapper, neighborIdx), distance=distance)
 
     for branch in branches:
         for idx, point in enumerate(branch.skeletonPoints):
@@ -246,7 +254,8 @@ def generatePotentialConnections(branches: List[Branch],
             neighborIndices = unfixedLookUp.query_ball_point(point, minDistanceThreshold)
             for neighborIdx in neighborIndices:
                 distance = np.linalg.norm(point - unfixedPoints[neighborIdx])
-                potentialConnections.add_edge((branch, idx), (unfixedWrapper, neighborIdx), distance=distance)
+                if distance > 0:
+                    potentialConnections.add_edge((branch, idx), (unfixedWrapper, neighborIdx), distance=distance)
 
     return potentialConnections
 
@@ -254,23 +263,22 @@ def generatePotentialConnections(branches: List[Branch],
 def updatePotentialConnections(potentialConnections: nx.Graph,
                                unfixedLookUp: KDTree,
                                unfixedWrapper: Branch,
-                               newBranch: Branch,
-                               splitEnd: Optional[Branch],
+                               branchesToUpdate: Iterable[Branch],
                                minDistanceThreshold: float):
     unfixedPoints = unfixedLookUp.data
-    for idx, point in enumerate(newBranch.skeletonPoints):
-        neighborIndices = unfixedLookUp.query_ball_point(point, minDistanceThreshold)
-        for neighborIdx in neighborIndices:
-            distance = np.linalg.norm(point - unfixedPoints[neighborIdx])
-            potentialConnections.add_edge((newBranch, idx), (unfixedWrapper, neighborIdx), distance=distance)
+    branchesToUpdate = list(dict.fromkeys(branchesToUpdate))
+    branchesToUpdateSet = set(branchesToUpdate)
 
-    if splitEnd is not None:
-        parent = splitEnd.parent
-        nx.relabel_nodes(potentialConnections, {(parent, i + len(parent)-1): (splitEnd, i)
-                                               for i in range(len(splitEnd))}, copy=False)
-        sharedNode = (splitEnd, 0)
-        duplicateNode = (parent, len(parent)-1)
-        potentialConnections.add_node(duplicateNode)
-        potentialConnections.add_weighted_edges_from([(duplicateNode, v, d) for u,v,d in
-                                                     potentialConnections.edges(sharedNode, data="distance")],
-                                                     weight="distance")
+    # Splitting/reorienting a component can shorten branches and reverse their
+    # point indices. Remove their old graph nodes before adding current indices.
+    staleNodes = [node for node in potentialConnections if node[0] in branchesToUpdateSet]
+    potentialConnections.remove_nodes_from(staleNodes)
+
+    for branch in branchesToUpdate:
+        for idx, point in enumerate(branch.skeletonPoints):
+            potentialConnections.add_node((branch, idx))
+            neighborIndices = unfixedLookUp.query_ball_point(point, minDistanceThreshold)
+            for neighborIdx in neighborIndices:
+                distance = np.linalg.norm(point - unfixedPoints[neighborIdx])
+                if distance > 0:
+                    potentialConnections.add_edge((branch, idx), (unfixedWrapper, neighborIdx), distance=distance)

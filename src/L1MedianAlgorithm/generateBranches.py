@@ -109,6 +109,9 @@ def _generateBranchesWithPool(tlsLookUp: KDTree,
 
         searchRange *= 1 + parameters["iterationSpeed"]
 
+    # Branch tracing can change isFix after the per-iteration close-point
+    # filtering, leaving coincident points in the final unfixed-point set.
+    skeletonData = filterCloseDataPoints(skeletonData, parameters["nearThreshold"])
     unfixedPoints = skeletonData["Coords"][~skeletonData["isFix"]]
 
     return skeletonBranches, unfixedPoints

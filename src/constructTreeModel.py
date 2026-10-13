@@ -48,6 +48,10 @@ def calculateBranchRadiiCentrifugal(trunk: Branch) -> Tuple[Dict[Branch, float],
         distances = distances[~trimmed]
         tlsPoints = branch.tlsPoints[~trimmed]
 
+        if len(distances) == 0:
+            branchRadii[branch] = np.nan
+            continue
+
         if branch.isStem() or np.isnan(branchRadii[branch.parent]):
             branchRadii[branch] = distances.mean()
             continue
@@ -75,7 +79,13 @@ def calculateBranchRadiiCentrifugal(trunk: Branch) -> Tuple[Dict[Branch, float],
             branchRadii[branch] = parentRadius
             radiusIsCredible[branch] = False
         else:
-            maxChildRadius = max([branchRadii[c] for c in branch.children])
+            validChildRadii = [branchRadii[c] for c in branch.children if not np.isnan(branchRadii[c])]
+            if not validChildRadii:
+                branchRadii[branch] = parentRadius
+                radiusIsCredible[branch] = False
+                continue
+
+            maxChildRadius = max(validChildRadii)
             if maxChildRadius > parentRadius:
                 branchRadii[branch] = parentRadius
                 radiusIsCredible[branch] = False
@@ -106,10 +116,13 @@ def getContinuations(trunk: Branch, branchRadii: Dict[Branch, float]) -> Dict[Br
             minAngle = min(childAngles.values())
 
             children.sort(key=lambda c: branchRadii[c], reverse=True)  # descending radius
-            for child in children:
-                if childAngles[child] / minAngle <= 1.1:
-                    continuationBranch = child
-                    break
+            if minAngle == 0:
+                continuationBranch = next((child for child in children if childAngles[child] == 0), None)
+            else:
+                for child in children:
+                    if childAngles[child] / minAngle <= 1.1:
+                        continuationBranch = child
+                        break
         else:
             continuationBranch = min(children, key=lambda c: childAngles[c])
 
