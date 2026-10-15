@@ -53,7 +53,7 @@ def main():
     analytics: Dict[str, Any] = {"run_started_at": datetime.now().astimezone().isoformat(timespec="seconds"),
                                  "input_name": path.basename(inputFile), "input_path": path.abspath(inputFile),
                                  "workers": args.workers, "point_count_input": len(tlsPoints)}
-    cylinders = createQSM(tlsPoints, parameters, args.workers, analytics)
+    cylinders = createQSM(tlsPoints, parameters, args.workers, analytics, args.useMultiprocessing)
     addParametersToAnalytics(analytics, parameters)
     analyticsFile = path.join(args.outputDirectory, "analytics.csv")
     appendAnalyticsRow(analyticsFile, analytics)
@@ -117,7 +117,9 @@ def parseArguments(argv):
     parser.add_argument("-p", "--parameters", type=str, help="Parameter file",
                         default=path.join(path.dirname(argv[0]), "parameters.yaml"))
     parser.add_argument("--delimiter", type=str, help="Delimiter used in the input point clouds", default=None)
-    parser.add_argument("-w", "--workers", type=int, help="Number of worker threads", default=1)
+    parser.add_argument("-w", "--workers", type=int, help="Number of worker processes", default=1)
+    parser.add_argument("--no-multiprocessing", dest="useMultiprocessing", action="store_false",
+                        help="Run parallel-capable stages in the current process")
 
     return parser.parse_args(argv[1:])
 
@@ -125,7 +127,8 @@ def parseArguments(argv):
 def createQSM(tlsPoints: npt.NDArray[np.double],
               parameters: Dict[str, Any],
               workers: int = 1,
-              analytics: Dict[str, Any] | None = None):
+              analytics: Dict[str, Any] | None = None,
+              useMultiprocessing: bool = True):
     if analytics is None:
         analytics = {}
 
@@ -157,14 +160,17 @@ def createQSM(tlsPoints: npt.NDArray[np.double],
 
     print(f"generating branches (starting after {time.perf_counter()-start_time} s)")
     stageStart = time.perf_counter()
-    branches, unfixedPoints = generateBranches(tlsPoints, seedPoints, relPathPositions, parameters, workers)
+    branches, unfixedPoints = generateBranches(tlsPoints, seedPoints, relPathPositions, parameters, workers,
+                                               useMultiprocessing)
     analytics["time_branch_generation_s"] = time.perf_counter() - stageStart
     analytics["branch_count_after_generation"] = len(branches)
     print("number of initial branches:", len(branches))
 
     print(f"constructing initial tree graph (starting after {time.perf_counter()-start_time} s)")
     stageStart = time.perf_counter()
-    trunk, prunedTlsPoints1 = constructTreeGraph(tlsPoints, branches, unfixedPoints, parameters, analytics=analytics)
+    trunk, prunedTlsPoints1 = constructTreeGraph(tlsPoints, branches, unfixedPoints, parameters,
+                                                 analytics=analytics, workers=workers,
+                                                 useMultiprocessing=useMultiprocessing)
     analytics["time_initial_tree_graph_construction_s"] = time.perf_counter() - stageStart
     analytics["point_count_pruned_during_tree_graph_construction"] = len(prunedTlsPoints1)
     analytics["point_count_after_tree_graph_filtering"] = sum(len(b.tlsPoints) for b in breadthFirstSearch(trunk))
@@ -186,7 +192,8 @@ def createQSM(tlsPoints: npt.NDArray[np.double],
 
     print(f"smoothing branches (starting after {time.perf_counter()-start_time} s)")
     stageStart = time.perf_counter()
-    unassignedTlsPoints = smoothBranches(trunk, tlsPoints, prunedTlsPoints, parameters, workers)
+    unassignedTlsPoints = smoothBranches(trunk, tlsPoints, prunedTlsPoints, parameters, workers,
+                                         useMultiprocessing)
     analytics["time_branch_smoothing_s"] = time.perf_counter() - stageStart
     analytics["point_count_clustering_input"] = len(unassignedTlsPoints)
 

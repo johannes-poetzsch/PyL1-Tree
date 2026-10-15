@@ -3,7 +3,7 @@ import networkx as nx
 import numpy as np
 import numpy.typing as npt
 from scipy.spatial import KDTree
-from typing import Iterable, List, Optional, Set, Tuple
+from typing import Iterable, List, Optional, Set, Tuple, Type
 
 from src.objects.branch import Branch
 from src.objects.connectedComponent import ConnectedComponent
@@ -25,8 +25,36 @@ def connectComponents(trunk: Branch,
                       resolution: float,
                       windowSize: float,
                       densityFactor: float,
-                      stepSize: Optional[float] = None
+                      stepSize: Optional[float] = None,
+                      workers: int = 1,
+                      useMultiprocessing: bool = True,
                       ) -> Tuple[List[Branch], npt.NDArray[np.double]]:
+    if workers > 1 and useMultiprocessing:
+        from src.connectComponentsParallel import connectComponentsParallel
+        return connectComponentsParallel(trunk, componentStems, unfixedPoints, unassignedPoints,
+                                         minDistanceThreshold, maxDistanceThreshold,
+                                         minAngleThreshold, maxAngleThreshold, resolution,
+                                         windowSize, densityFactor, stepSize, workers)
+
+    return _connectComponentsSerial(trunk, componentStems, unfixedPoints, unassignedPoints,
+                                    minDistanceThreshold, maxDistanceThreshold,
+                                    minAngleThreshold, maxAngleThreshold, resolution,
+                                    windowSize, densityFactor, stepSize)
+
+
+def _connectComponentsSerial(trunk: Branch,
+                             componentStems: List[Branch],
+                             unfixedPoints: npt.NDArray[np.double],
+                             unassignedPoints: npt.NDArray[np.double],
+                             minDistanceThreshold: float,
+                             maxDistanceThreshold: float,
+                             minAngleThreshold: float,
+                             maxAngleThreshold: float,
+                             resolution: float,
+                             windowSize: float,
+                             densityFactor: float,
+                             stepSize: Optional[float] = None
+                             ) -> Tuple[List[Branch], npt.NDArray[np.double]]:
     rootComponent = ConnectedComponent(list(breadthFirstSearch(trunk)))
     connectedComponents = {rootComponent}
     unconnectedComponents = {UnconnectedComponent(list(breadthFirstSearch(stem)))
@@ -122,13 +150,18 @@ def findConnections(connectedComponent: ConnectedComponent,
                     maxAngleThreshold: float,
                     windowSize: float,
                     densityFactor: float,
-                    stepSize: Optional[float] = None):
-    for endBranch in unconnectedComponent.branches:
+                    stepSize: Optional[float] = None,
+                    endBranches: Optional[Iterable[Branch]] = None,
+                    startBranches: Optional[Iterable[Branch]] = None,
+                    connectionType: Type[Connection] = Connection) -> None:
+    endBranches = unconnectedComponent.branches if endBranches is None else endBranches
+    startBranches = connectedComponent.branches if startBranches is None else startBranches
+    for endBranch in endBranches:
         if connectedComponent.getObjectBBDistance(endBranch) > maxDistanceThreshold:
             continue
         directionsAtEnd = unconnectedComponent.getDirectionData(endBranch, minDistanceThreshold)
 
-        for startBranch in connectedComponent.branches:
+        for startBranch in startBranches:
             if startBranch.getObjectBBDistance(endBranch) > maxDistanceThreshold:
                 continue
 
@@ -144,10 +177,10 @@ def findConnections(connectedComponent: ConnectedComponent,
 
                     # score the direct connection between the points
                     connectionLine = np.stack((startPoint, endPoint))
-                    connection = Connection(connectionLine, tlsManager,
-                                            startBranch, startIdx, connectedComponent, endBranch, endIdx,
-                                            startDirection, childDirections, minDistanceThreshold,
-                                            minAngleThreshold, maxAngleThreshold, windowSize, densityFactor, stepSize)
+                    connection = connectionType(connectionLine, tlsManager,
+                                                startBranch, startIdx, connectedComponent, endBranch, endIdx,
+                                                startDirection, childDirections, minDistanceThreshold,
+                                                minAngleThreshold, maxAngleThreshold, windowSize, densityFactor, stepSize)
                     if connection.isCredible:
                         unconnectedComponent.connections.append(connection)
 
@@ -158,10 +191,10 @@ def findConnections(connectedComponent: ConnectedComponent,
                         continue
 
                     connectionStrip = np.stack([branch.skeletonPoints[idx] for branch, idx in path])
-                    connection = Connection(connectionStrip, tlsManager,
-                                            startBranch, startIdx, connectedComponent, endBranch, endIdx,
-                                            startDirection, childDirections, minDistanceThreshold,
-                                            minAngleThreshold, maxAngleThreshold, windowSize, densityFactor)
+                    connection = connectionType(connectionStrip, tlsManager,
+                                                startBranch, startIdx, connectedComponent, endBranch, endIdx,
+                                                startDirection, childDirections, minDistanceThreshold,
+                                                minAngleThreshold, maxAngleThreshold, windowSize, densityFactor)
                     if connection.isCredible:
                         unconnectedComponent.connections.append(connection)
 
