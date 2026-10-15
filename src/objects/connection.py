@@ -81,7 +81,7 @@ class Connection(BoundedObject):
             raise ValueError("Can not connect to trunk at idx 0.")
         if sibling is not None:
             self.startComponent.branches.append(sibling)
-            del self.startComponent.directionData[parent]
+            self.startComponent.directionData.pop(parent, None)
 
         # the original tlsIds only included points in a reasonable radius around the connection
         # however, there might be other improved points outside of this range

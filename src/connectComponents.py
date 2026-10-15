@@ -131,8 +131,7 @@ def connectComponent(connectionComponent: UnconnectedComponent,
     if splitEnd is not None:
         splitBranch = splitEnd.parent
         for component in connectedComponents:
-            if splitBranch in component.directionData:
-                del component.directionData[splitBranch]
+            component.directionData.pop(splitBranch, None)
 
     for component in unconnectedComponents:
         component.updateConnections(connection, connectionBranch)
@@ -287,15 +286,17 @@ def generatePotentialConnections(branches: List[Branch],
 def updatePotentialConnections(potentialConnections: nx.Graph,
                                unfixedLookUp: KDTree,
                                unfixedWrapper: Branch,
-                               newBranch: Branch,
+                               newBranch: Branch | Iterable[Branch],
                                splitEnd: Optional[Branch],
                                minDistanceThreshold: float):
     unfixedPoints = unfixedLookUp.data
-    for idx, point in enumerate(newBranch.skeletonPoints):
-        neighborIndices = unfixedLookUp.query_ball_point(point, minDistanceThreshold)
-        for neighborIdx in neighborIndices:
-            distance = np.linalg.norm(point - unfixedPoints[neighborIdx])
-            potentialConnections.add_edge((newBranch, idx), (unfixedWrapper, neighborIdx), distance=distance)
+    newBranches = [newBranch] if isinstance(newBranch, Branch) else list(newBranch)
+    for branch in newBranches:
+        for idx, point in enumerate(branch.skeletonPoints):
+            neighborIndices = unfixedLookUp.query_ball_point(point, minDistanceThreshold)
+            for neighborIdx in neighborIndices:
+                distance = np.linalg.norm(point - unfixedPoints[neighborIdx])
+                potentialConnections.add_edge((branch, idx), (unfixedWrapper, neighborIdx), distance=distance)
 
     if splitEnd is not None:
         parent = splitEnd.parent
