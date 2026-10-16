@@ -4,7 +4,7 @@ from scipy.spatial import KDTree
 from typing import List, Optional, Tuple
 
 from src.objects.branch import Branch
-from src.utils.geometry import queryPointsNearSegment
+from src.utils.geometry import queryPointsNearStrip
 
 
 class TlsPointManager:
@@ -166,13 +166,10 @@ class TlsPointManager:
                                     distances: npt.NDArray[np.double],
                                     maxDistance: float
                                     ) -> npt.NDArray[np.intp]:
-        stripSegments = np.stack([strip[:-1], strip[1:]], axis=1)
-
-        localIndices = [queryPointsNearSegment(lookUp, s[0], s[1], maxDistance) for s in stripSegments]
-        if np.all([len(i) == 0 for i in localIndices]):
+        localIndices = queryPointsNearStrip(lookUp, strip, maxDistance)
+        if len(localIndices) == 0:
             return np.empty(0, dtype=np.intp)
 
-        localMaxDistance = np.max([distances[i].max(initial=0.0) for i in localIndices])
-        indices = np.unique(np.concatenate(
-            [queryPointsNearSegment(lookUp, s[0], s[1], localMaxDistance) for s in stripSegments], axis=0))
-        return indices
+        localMaxDistance = np.max(distances[localIndices], initial=0.0)
+        indices = queryPointsNearStrip(lookUp, strip, localMaxDistance)
+        return np.unique(indices)

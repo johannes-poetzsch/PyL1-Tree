@@ -157,6 +157,48 @@ def queryPointsNearSegment(lookUp: KDTree,
     return indices.astype(np.intp, copy=False)
 
 
+def queryPointsNearStrip(lookUp: KDTree,
+                         strip: npt.NDArray[np.double],
+                         range: float,
+                         spacing: Optional[float] = None
+                         ) -> npt.NDArray[np.intp]:
+    """Return points near any segment of a strip using one batched KD-tree query."""
+    if range <= 0 or len(strip) < 2:
+        return np.empty(0, dtype=np.intp)
+
+    segmentVectors = strip[1:] - strip[:-1]
+    segmentLengths = np.linalg.norm(segmentVectors, axis=1)
+
+    samplePoints = []
+    queryRadii = []
+    for segmentIdx, (startPoint, endPoint, segmentVector, segmentLength) in enumerate(
+            zip(strip[:-1], strip[1:], segmentVectors, segmentLengths)):
+        segmentSpacing = 2 * range if spacing is None else spacing
+        segmentSpacing = min(segmentSpacing, max(segmentLength, 1e-9))
+
+        numIntervals = max(1, int(np.ceil(segmentLength / segmentSpacing)))
+        t = np.linspace(0.0, 1.0, numIntervals + 1)
+        samplesForSegment = startPoint + t[:, None] * segmentVector
+
+        actualSpacing = segmentLength / numIntervals
+        radiiForSegment = np.full(numIntervals + 1, np.sqrt(range ** 2 + (actualSpacing / 2) ** 2), dtype=np.double)
+
+        if segmentIdx > 0:
+            # The shared vertex covers both segment queries, so retain the larger radius that either segment would have used.
+            queryRadii[-1][-1] = max(queryRadii[-1][-1], radiiForSegment[0])
+            samplesForSegment = samplesForSegment[1:]
+            radiiForSegment = radiiForSegment[1:]
+
+        samplePoints.append(samplesForSegment)
+        queryRadii.append(radiiForSegment)
+
+    samples = np.concatenate(samplePoints, axis=0)
+    radii = np.concatenate(queryRadii)
+    workers = -1 if len(samples) >= 32 else 1
+    neighbors = lookUp.query_ball_point(samples, radii, workers=workers, return_sorted=False)
+    return np.concatenate(neighbors, axis=0)
+
+
 def pointSort(points: npt.NDArray,
               order: Tuple[Literal['x', 'y', 'z'], Literal['x', 'y', 'z'], Literal['x', 'y', 'z']] = ('x', 'y', 'z')
               ) -> npt.NDArray:
