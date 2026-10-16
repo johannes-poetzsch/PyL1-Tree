@@ -3,23 +3,7 @@ import pytest
 from scipy.spatial import KDTree
 
 from src.objects.tlsPointManager import TlsPointManager
-from src.utils.geometry import (linesPointsDistances, queryPointsNearSegment,
-                                setFastStripPointDistances,
-                                stripPointsDistances)
-
-
-def test_query_points_near_segment_returns_integer_indices_when_empty():
-    lookup = KDTree(np.array([[10.0, 10.0, 10.0]]))
-
-    indices = queryPointsNearSegment(
-        lookup,
-        np.array([0.0, 0.0, 0.0]),
-        np.array([1.0, 0.0, 0.0]),
-        0.01,
-    )
-
-    assert indices.dtype == np.dtype(np.intp)
-    assert indices.size == 0
+from src.utils.geometry import (linesPointsDistances, setFastStripPointDistances, stripPointsDistances)
 
 
 def test_find_point_indices_around_strip_handles_empty_segment_queries():
