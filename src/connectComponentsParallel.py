@@ -18,7 +18,8 @@ import numpy.typing as npt
 from scipy.spatial import KDTree
 
 from src.connectComponents import (connectComponent, findConnections, findContinuation,
-                                   generatePotentialConnections, updatePotentialConnections)
+                                   generatePotentialConnections, getPotentialConnectionUpdateBranches,
+                                   updatePotentialConnections)
 from src.objects.branch import Branch
 from src.objects.connectedComponent import ConnectedComponent
 from src.objects.connection import Connection
@@ -204,8 +205,9 @@ def _workerLoop(workerId: int,
             if isinstance(tlsManager, SharedTlsPointManager):
                 tlsManager.applyBranchSlices(payload["branchSlices"], payload["changedBranchIds"])
             if unfixedWrapper is not None:
+                branchesToUpdate = getPotentialConnectionUpdateBranches(connectionBranch, splitEnd, tlsManager)
                 updatePotentialConnections(potentialConnections, unfixedLookUp, unfixedWrapper,
-                                           connectionBranch, splitEnd, minDistanceThreshold)
+                                           branchesToUpdate, minDistanceThreshold)
             outputQueue.put((workerId, "applied", None))
 
 
@@ -328,8 +330,9 @@ def connectComponentsParallel(trunk: Branch,
             connectionPayload["boundingBoxMin"] = connection.boundingBoxMin
             connectionPayload["boundingBoxMax"] = connection.boundingBoxMax
             if unfixedWrapper is not None:
+                branchesToUpdate = getPotentialConnectionUpdateBranches(connectionBranch, splitEnd, tlsManager)
                 updatePotentialConnections(potentialConnections, unfixedLookUp, unfixedWrapper,
-                                           connectionBranch, splitEnd, minDistanceThreshold)
+                                           branchesToUpdate, minDistanceThreshold)
 
             connectionPayload["resolution"] = resolution
             changedBranchIds = tlsManager.getChangedBranchIds()
