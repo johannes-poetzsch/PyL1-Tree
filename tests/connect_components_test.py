@@ -146,16 +146,22 @@ def test_generate_potential_connections(potential_connection_edges, branches, un
     unfixedLookUp, unfixedWrapper = KDTree(unfixed_points), Branch(unfixed_points)
     potentialConnections = generatePotentialConnections(branches, unfixedLookUp, unfixedWrapper,
                                                         parameters["minDistanceThreshold"])
-    edges = [np.stack((u[0][u[1]], v[0][v[1]])) for u,v in potentialConnections.edges]
+    edges = [np.stack((u[0][u[1]], v[0][v[1]])) for u, v in potentialConnections.edges]
 
-    # sort edge points so that the edge orientation does not matter
-    edges, expected_edges = [np.sort(e, axis=0) for e in edges], [np.sort(e, axis=0) for e in potential_connection_edges]
-    # TODO: fix this test
-    edges, expected_edges = np.sort(np.stack(edges), axis=0), np.sort(np.stack(expected_edges), axis=0)
+    def canonical(edge_list):
+        # orient each edge lexicographically so orientation does not matter, then deduplicate
+        result = set()
+        for e in edge_list:
+            a, b = (tuple(np.round(p, 6)) for p in e)
+            if a != b:
+                result.add((min(a, b), max(a, b)))
+        return result
 
-    # expected edges might appear multiple times in edges
-    # since points can appear in multiple branches and a new (duplicate) edge is created for each branch
-    np.testing.assert_array_equal(np.unique(edges), expected_edges)
+    # actual edges might appear multiple times since points can appear in multiple branches
+    # and a new (duplicate) edge is created for each branch
+    actual, expected = canonical(edges), canonical(potential_connection_edges)
+    assert len(actual - expected) == 0, f"{len(actual - expected)} unexpected edges, e.g. {next(iter(actual - expected))}"
+    assert len(expected - actual) == 0, f"{len(expected - actual)} missing edges, e.g. {next(iter(expected - actual))}"
 
 
 @pytest.mark.parametrize("connection_type", ["simple connections", "indirect connections"])
@@ -199,5 +205,20 @@ def test_connect_components(branches, components_stems, parameters, unfixed_poin
                       parameters["minDistanceThreshold"], parameters["maxDistanceThreshold"],
                       np.deg2rad(parameters["minAngleThreshold"]), np.deg2rad(parameters["maxAngleThreshold"]),
                       parameters["resolution"], parameters["windowSize"], parameters["densityFactor"], 0.01)
+
+    assert subtrees_are_equal(trunk, tree_graph_after_connection, compareTlsPoints=False)
+
+
+def test_connect_components_multiprocessing(branches, components_stems, parameters, unfixed_points, assigned_points,
+                                            unassigned_points, tree_graph_after_connection):
+    Branch.assignAllPoints(assigned_points, branches)
+
+    trunk = components_stems[0]
+
+    connectComponents(trunk, components_stems, unfixed_points, unassigned_points,
+                      parameters["minDistanceThreshold"], parameters["maxDistanceThreshold"],
+                      np.deg2rad(parameters["minAngleThreshold"]), np.deg2rad(parameters["maxAngleThreshold"]),
+                      parameters["resolution"], parameters["windowSize"], parameters["densityFactor"], 0.01,
+                      workers=2, useMultiprocessing=True)
 
     assert subtrees_are_equal(trunk, tree_graph_after_connection, compareTlsPoints=False)

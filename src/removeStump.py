@@ -52,7 +52,7 @@ def findBaseWithoutStump(tlsPoints: npt.NDArray[np.double],
 def computeSliceProfile(points: npt.NDArray[np.double],
                         sliceThickness: float = 0.06,
                         sliceStep: float = 0.03,
-                        numRegions: int= int(265/5),
+                        numRegions: int = int(265/5),
                         minPointsPerSlice: int = 10,
                         trimQuantile: Optional[float] = None,
                         useRansac: bool = False

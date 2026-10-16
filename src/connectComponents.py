@@ -3,7 +3,7 @@ import networkx as nx
 import numpy as np
 import numpy.typing as npt
 from scipy.spatial import KDTree
-from typing import Iterable, List, Optional, Set, Tuple
+from typing import Dict, Iterable, List, Optional, Set, Tuple, Type
 
 from src.objects.branch import Branch
 from src.objects.connectedComponent import ConnectedComponent
@@ -25,8 +25,36 @@ def connectComponents(trunk: Branch,
                       resolution: float,
                       windowSize: float,
                       densityFactor: float,
-                      stepSize: Optional[float] = None
+                      stepSize: Optional[float] = None,
+                      workers: int = 1,
+                      useMultiprocessing: bool = True,
                       ) -> Tuple[List[Branch], npt.NDArray[np.double]]:
+    if workers > 1 and useMultiprocessing:
+        from src.connectComponentsParallel import connectComponentsParallel
+        return connectComponentsParallel(trunk, componentStems, unfixedPoints, unassignedPoints,
+                                         minDistanceThreshold, maxDistanceThreshold,
+                                         minAngleThreshold, maxAngleThreshold, resolution,
+                                         windowSize, densityFactor, stepSize, workers)
+
+    return _connectComponentsSerial(trunk, componentStems, unfixedPoints, unassignedPoints,
+                                    minDistanceThreshold, maxDistanceThreshold,
+                                    minAngleThreshold, maxAngleThreshold, resolution,
+                                    windowSize, densityFactor, stepSize)
+
+
+def _connectComponentsSerial(trunk: Branch,
+                             componentStems: List[Branch],
+                             unfixedPoints: npt.NDArray[np.double],
+                             unassignedPoints: npt.NDArray[np.double],
+                             minDistanceThreshold: float,
+                             maxDistanceThreshold: float,
+                             minAngleThreshold: float,
+                             maxAngleThreshold: float,
+                             resolution: float,
+                             windowSize: float,
+                             densityFactor: float,
+                             stepSize: Optional[float] = None
+                             ) -> Tuple[List[Branch], npt.NDArray[np.double]]:
     rootComponent = ConnectedComponent(list(breadthFirstSearch(trunk)))
     connectedComponents = {rootComponent}
     unconnectedComponents = {UnconnectedComponent(list(breadthFirstSearch(stem)))
@@ -73,7 +101,8 @@ def connectComponents(trunk: Branch,
         connectionBranch, splitEnd = connectComponent(connectionComponent, unconnectedComponents, connectedComponents,
                                                       tlsManager, resolution)
 
-        updatePotentialConnections(potentialConnections, unfixedLookUp, unfixedWrapper, connectionBranch, splitEnd,
+        branchesToUpdate = getPotentialConnectionUpdateBranches(connectionBranch, splitEnd, tlsManager)
+        updatePotentialConnections(potentialConnections, unfixedLookUp, unfixedWrapper, branchesToUpdate,
                                    minDistanceThreshold)
 
         maxDistanceThreshold = originalMaxDistanceThreshold
@@ -95,19 +124,27 @@ def connectComponent(connectionComponent: UnconnectedComponent,
                      tlsManager: TlsPointManager,
                      resolution: float,
                      ) -> Tuple[Branch, Optional[Branch]]:
-    unconnectedComponents.remove(connectionComponent)
-    connection = connectionComponent.connections[0]
-    connectionComponent, connectionBranch, splitEnd = connectionComponent.connect(tlsManager, resolution)
+    unconnectedComponent = connectionComponent
+    unconnectedComponents.remove(unconnectedComponent)
+    connection = unconnectedComponent.connections[0]
+    connectionComponent, connectionBranch, splitEnd = unconnectedComponent.connect(tlsManager, resolution)
     connectedComponents.add(connectionComponent)
 
     if splitEnd is not None:
         splitBranch = splitEnd.parent
         for component in connectedComponents:
-            if splitBranch in component.directionData:
-                del component.directionData[splitBranch]
+            component.directionData.pop(splitBranch, None)
 
     for component in unconnectedComponents:
         component.updateConnections(connection, connectionBranch)
+
+    # The component is no longer searched after connection. Drop its losing
+    # candidates and the accepted candidate's point cache once updates finish.
+    unconnectedComponent.connections.clear()
+    connection.assignedTlsIds = np.empty(0, dtype=np.intp)
+    connection.aNewDistances = np.empty(0, dtype=np.double)
+    connection.unassignedTlsIds = np.empty(0, dtype=np.intp)
+    connection.uaNewDistances = np.empty(0, dtype=np.double)
 
     return connectionBranch, splitEnd
 
@@ -122,13 +159,18 @@ def findConnections(connectedComponent: ConnectedComponent,
                     maxAngleThreshold: float,
                     windowSize: float,
                     densityFactor: float,
-                    stepSize: Optional[float] = None):
-    for endBranch in unconnectedComponent.branches:
+                    stepSize: Optional[float] = None,
+                    endBranches: Optional[Iterable[Branch]] = None,
+                    startBranches: Optional[Iterable[Branch]] = None,
+                    connectionType: Type[Connection] = Connection) -> None:
+    endBranches = unconnectedComponent.branches if endBranches is None else endBranches
+    startBranches = connectedComponent.branches if startBranches is None else startBranches
+    for endBranch in endBranches:
         if connectedComponent.getObjectBBDistance(endBranch) > maxDistanceThreshold:
             continue
         directionsAtEnd = unconnectedComponent.getDirectionData(endBranch, minDistanceThreshold)
 
-        for startBranch in connectedComponent.branches:
+        for startBranch in startBranches:
             if startBranch.getObjectBBDistance(endBranch) > maxDistanceThreshold:
                 continue
 
@@ -144,10 +186,10 @@ def findConnections(connectedComponent: ConnectedComponent,
 
                     # score the direct connection between the points
                     connectionLine = np.stack((startPoint, endPoint))
-                    connection = Connection(connectionLine, tlsManager,
-                                            startBranch, startIdx, connectedComponent, endBranch, endIdx,
-                                            startDirection, childDirections, minDistanceThreshold,
-                                            minAngleThreshold, maxAngleThreshold, windowSize, densityFactor, stepSize)
+                    connection = connectionType(connectionLine, tlsManager,
+                                                startBranch, startIdx, connectedComponent, endBranch, endIdx,
+                                                startDirection, childDirections, minDistanceThreshold,
+                                                minAngleThreshold, maxAngleThreshold, windowSize, densityFactor, stepSize)
                     if connection.isCredible:
                         unconnectedComponent.connections.append(connection)
 
@@ -158,10 +200,10 @@ def findConnections(connectedComponent: ConnectedComponent,
                         continue
 
                     connectionStrip = np.stack([branch.skeletonPoints[idx] for branch, idx in path])
-                    connection = Connection(connectionStrip, tlsManager,
-                                            startBranch, startIdx, connectedComponent, endBranch, endIdx,
-                                            startDirection, childDirections, minDistanceThreshold,
-                                            minAngleThreshold, maxAngleThreshold, windowSize, densityFactor)
+                    connection = connectionType(connectionStrip, tlsManager,
+                                                startBranch, startIdx, connectedComponent, endBranch, endIdx,
+                                                startDirection, childDirections, minDistanceThreshold,
+                                                minAngleThreshold, maxAngleThreshold, windowSize, densityFactor)
                     if connection.isCredible:
                         unconnectedComponent.connections.append(connection)
 
@@ -240,37 +282,64 @@ def generatePotentialConnections(branches: List[Branch],
             distance = np.linalg.norm(unfixedPoints[neighborIdx] - unfixedPoints[idx])
             potentialConnections.add_edge((unfixedWrapper, idx), (unfixedWrapper, neighborIdx), distance=distance)
 
+    branchNodeCounts: Dict[Branch, int] = {}
     for branch in branches:
+        branchNodeCounts[branch] = len(branch)
         for idx, point in enumerate(branch.skeletonPoints):
-            potentialConnections.add_node((branch, idx))
+            node = (branch, idx)
+            potentialConnections.add_node(node)
             neighborIndices = unfixedLookUp.query_ball_point(point, minDistanceThreshold)
             for neighborIdx in neighborIndices:
                 distance = np.linalg.norm(point - unfixedPoints[neighborIdx])
-                potentialConnections.add_edge((branch, idx), (unfixedWrapper, neighborIdx), distance=distance)
+                potentialConnections.add_edge(node, (unfixedWrapper, neighborIdx), distance=distance)
 
+    # Keep branch node counts separately so updates can remove old indices
+    # without scanning the graph's TLS-point nodes.
+    potentialConnections.graph["branchNodeCounts"] = branchNodeCounts
     return potentialConnections
+
+
+def getPotentialConnectionUpdateBranches(connectionBranch: Branch,
+                                         splitEnd: Optional[Branch],
+                                         tlsManager: TlsPointManager) -> Set[Branch]:
+    """Return branches whose geometry or graph membership changed on apply."""
+    branchesToUpdate = set(breadthFirstSearch(connectionBranch))
+    if splitEnd is not None:
+        if splitEnd.parent is not None:
+            branchesToUpdate.add(splitEnd.parent)
+        branchesToUpdate.add(splitEnd)
+
+    # A one-child expansion removes a branch from the live tree but leaves it
+    # in the manager's branch table. Its graph nodes still need to be removed.
+    branchesToUpdate.update(branch for branch in tlsManager.branches if branch.isRemoved)
+    return branchesToUpdate
 
 
 def updatePotentialConnections(potentialConnections: nx.Graph,
                                unfixedLookUp: KDTree,
                                unfixedWrapper: Branch,
-                               newBranch: Branch,
-                               splitEnd: Optional[Branch],
-                               minDistanceThreshold: float):
+                               branchesToUpdate: Iterable[Branch],
+                               minDistanceThreshold: float) -> None:
     unfixedPoints = unfixedLookUp.data
-    for idx, point in enumerate(newBranch.skeletonPoints):
-        neighborIndices = unfixedLookUp.query_ball_point(point, minDistanceThreshold)
-        for neighborIdx in neighborIndices:
-            distance = np.linalg.norm(point - unfixedPoints[neighborIdx])
-            potentialConnections.add_edge((newBranch, idx), (unfixedWrapper, neighborIdx), distance=distance)
+    branchesToUpdate = list(dict.fromkeys(branchesToUpdate))
+    branchNodeCounts = potentialConnections.graph.setdefault("branchNodeCounts", {})
 
-    if splitEnd is not None:
-        parent = splitEnd.parent
-        nx.relabel_nodes(potentialConnections, {(parent, i + len(parent)-1): (splitEnd, i)
-                                               for i in range(len(splitEnd))}, copy=False)
-        sharedNode = (splitEnd, 0)
-        duplicateNode = (parent, len(parent)-1)
-        potentialConnections.add_node(duplicateNode)
-        potentialConnections.add_weighted_edges_from([(duplicateNode, v, d) for u,v,d in
-                                                     potentialConnections.edges(sharedNode, data="distance")],
-                                                     weight="distance")
+    # Splits and subtree reorientations can shorten branches or change point indices.
+    # Remove the old nodes and edges before rebuilding current geometry.
+    staleNodes = []
+    for branch in branchesToUpdate:
+        staleNodeCount = branchNodeCounts.pop(branch, 0)
+        staleNodes.extend((branch, idx) for idx in range(staleNodeCount))
+    potentialConnections.remove_nodes_from(staleNodes)
+
+    for branch in branchesToUpdate:
+        if branch.isRemoved:
+            continue
+        for idx, point in enumerate(branch.skeletonPoints):
+            node = (branch, idx)
+            potentialConnections.add_node(node)
+            neighborIndices = unfixedLookUp.query_ball_point(point, minDistanceThreshold)
+            for neighborIdx in neighborIndices:
+                distance = np.linalg.norm(point - unfixedPoints[neighborIdx])
+                potentialConnections.add_edge(node, (unfixedWrapper, neighborIdx), distance=distance)
+        branchNodeCounts[branch] = len(branch)

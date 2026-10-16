@@ -21,7 +21,9 @@ def constructTreeGraph(tlsPoints: npt.NDArray[np.double],
                        unfixedPoints: npt.NDArray[np.double],
                        parameters: Dict[str, Any],
                        heightAttribute: int = 2,
-                       analytics: Dict[str, Any] | None = None
+                       analytics: Dict[str, Any] | None = None,
+                       workers: int = 1,
+                       useMultiprocessing: bool = True
                        ) -> Tuple[Branch, npt.NDArray[np.double]]:
     Branch.assignAllPoints(tlsPoints, branches, useTrimming=True)
     branches, _ = preFilterBranches(branches, parameters["baseRadius"])
@@ -38,7 +40,8 @@ def constructTreeGraph(tlsPoints: npt.NDArray[np.double],
         trunk, componentStems, unfixedPoints, trimmedPoints,
         parameters["minDistanceThreshold"], parameters["maxDistanceThreshold"],
         np.deg2rad(parameters["minAngleThreshold"]), np.deg2rad(parameters["maxAngleThreshold"]),
-        parameters["resolution"], parameters["windowSize"], parameters["densityFactor"])
+        parameters["resolution"], parameters["windowSize"], parameters["densityFactor"],
+        workers=workers, useMultiprocessing=useMultiprocessing)
     if analytics is not None:
         analytics["time_component_connection_s"] = time.perf_counter() - connectionStart
 

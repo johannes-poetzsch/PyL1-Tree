@@ -61,7 +61,7 @@ class Connection(BoundedObject):
             return
 
         assignedIds, unassignedIds = tlsManager.getPointsAtStrip(strip, startBranch)
-        self.assignedTlsIds, self.aNewDistances, self.unassignedTlsIds, self.uaNewDistances, pedalPoints, segmentIds = (
+        self.assignedTlsIds, aNewDistances, self.unassignedTlsIds, uaNewDistances, pedalPoints, segmentIds = (
             self.findImprovedPoints(assignedIds, unassignedIds, 2 * self.tlsManager.searchRanges[startBranch]))
 
         if not self.densityIsCredible(pedalPoints, segmentIds):
@@ -72,7 +72,9 @@ class Connection(BoundedObject):
         BoundedObject.__init__(self, boundingBoxMin, boundingBoxMax)
 
 
-        self.score = self.calculateScore()
+        self.score = self.calculateScore(aNewDistances, uaNewDistances)
+        self.aNewDistances = np.empty(0, dtype=np.double)
+        self.uaNewDistances = np.empty(0, dtype=np.double)
 
 
     def apply(self, resolution: float):
@@ -81,7 +83,7 @@ class Connection(BoundedObject):
             raise ValueError("Can not connect to trunk at idx 0.")
         if sibling is not None:
             self.startComponent.branches.append(sibling)
-            del self.startComponent.directionData[parent]
+            self.startComponent.directionData.pop(parent, None)
 
         # the original tlsIds only included points in a reasonable radius around the connection
         # however, there might be other improved points outside of this range
@@ -128,9 +130,11 @@ class Connection(BoundedObject):
         return True
 
 
-    def calculateScore(self) -> float:
+    def calculateScore(self,
+                       aNewDistances: npt.NDArray[np.double],
+                       uaNewDistances: npt.NDArray[np.double]) -> float:
         connectionLength = np.sum(np.linalg.norm(self.strip[1:] - self.strip[:-1], axis=1))
-        distances = np.append(self.aNewDistances, self.uaNewDistances, axis=0)
+        distances = np.append(aNewDistances, uaNewDistances, axis=0)
 
         return len(distances) / connectionLength / distances.mean()
 
@@ -218,13 +222,12 @@ class Connection(BoundedObject):
             return
 
         if self.getObjectBBDistance(realizedConnection) == 0:
-            self.assignedTlsIds, self.aNewDistances, self.unassignedTlsIds, self.uaNewDistances, pedalPoints, segmentIds = (
-                self.findImprovedPoints(self.assignedTlsIds, self.unassignedTlsIds))
+            (self.assignedTlsIds, aNewDistances, self.unassignedTlsIds, uaNewDistances,
+             pedalPoints, segmentIds) = self.findImprovedPoints(self.assignedTlsIds, self.unassignedTlsIds)
 
             self.isCredible = self.densityIsCredible(pedalPoints, segmentIds)
-
-        if self.isCredible:
-            self.score = self.calculateScore()
+            if self.isCredible:
+                self.score = self.calculateScore(aNewDistances, uaNewDistances)
 
 
     @staticmethod
