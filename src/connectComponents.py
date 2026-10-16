@@ -124,9 +124,10 @@ def connectComponent(connectionComponent: UnconnectedComponent,
                      tlsManager: TlsPointManager,
                      resolution: float,
                      ) -> Tuple[Branch, Optional[Branch]]:
-    unconnectedComponents.remove(connectionComponent)
-    connection = connectionComponent.connections[0]
-    connectionComponent, connectionBranch, splitEnd = connectionComponent.connect(tlsManager, resolution)
+    unconnectedComponent = connectionComponent
+    unconnectedComponents.remove(unconnectedComponent)
+    connection = unconnectedComponent.connections[0]
+    connectionComponent, connectionBranch, splitEnd = unconnectedComponent.connect(tlsManager, resolution)
     connectedComponents.add(connectionComponent)
 
     if splitEnd is not None:
@@ -136,6 +137,14 @@ def connectComponent(connectionComponent: UnconnectedComponent,
 
     for component in unconnectedComponents:
         component.updateConnections(connection, connectionBranch)
+
+    # The component is no longer searched after connection. Drop its losing
+    # candidates and the accepted candidate's point cache once updates finish.
+    unconnectedComponent.connections.clear()
+    connection.assignedTlsIds = np.empty(0, dtype=np.intp)
+    connection.aNewDistances = np.empty(0, dtype=np.double)
+    connection.unassignedTlsIds = np.empty(0, dtype=np.intp)
+    connection.uaNewDistances = np.empty(0, dtype=np.double)
 
     return connectionBranch, splitEnd
 
