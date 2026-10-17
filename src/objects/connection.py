@@ -91,9 +91,7 @@ class Connection(BoundedObject):
             TlsPointManager.findPointIndicesAroundStrip(
                 self.strip, self.tlsManager.assignedPointsLookUp,
                 self.tlsManager.assignedPointsDistances, self.tlsManager.assignedPointsMaxDistance),
-            TlsPointManager.findPointIndicesAroundStrip(
-                self.strip, self.tlsManager.unassignedPointsLookUp,
-                self.tlsManager.unassignedPointsDistances, self.tlsManager.unassignedPointsMaxDistance))
+            self.tlsManager.getUnassignedPointIndicesAroundStrip(self.strip))
 
         self.boundingBoxMin, self.boundingBoxMax = self.getBoundingBox()
 

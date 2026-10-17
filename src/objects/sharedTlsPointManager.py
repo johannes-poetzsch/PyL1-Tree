@@ -71,14 +71,14 @@ class SharedTlsPointManager(TlsPointManager):
     """TLS point manager whose point-sized arrays are shared between processes.
 
     Branch objects and their slice descriptors remain process-local. The point
-    ID buffer and all point-sized numeric arrays live in shared memory. Only the
-    parent process mutates these buffers; workers receive updated slice
-    descriptors after each applied connection.
+    ID buffer, point-sized numeric arrays, and immutable unassigned-point search
+    grid live in shared memory. Only the parent process mutates point data;
+    workers receive updated slice descriptors after each applied connection.
     """
 
     _sharedAttributeNames = (
         "assignedPoints", "assignedPointsDistances", "assignedPointsBranchIndices",
-        "unassignedPoints", "unassignedPointsDistances", "pointIds"
+        "unassignedPoints", "unassignedPointsDistances", "unassignedPointSearchRadiusGrid", "pointIds"
     )
 
 
@@ -101,6 +101,7 @@ class SharedTlsPointManager(TlsPointManager):
             "assignedPointsBranchIndices": self.assignedPointsBranchIndices.astype(np.intp, copy=False),
             "unassignedPoints": self.unassignedPoints,
             "unassignedPointsDistances": self.unassignedPointsDistances,
+            "unassignedPointSearchRadiusGrid": self.unassignedPointSearchRadiusGrid,
             "pointIds": flatPointIds,
         }
         self._sharedArrays = {}
