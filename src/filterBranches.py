@@ -12,13 +12,19 @@ from src.utils.iteration import breadthFirstSearch
 def filterTreeBranches(stem: Branch,
                        parameters: dict,
                        pruneNewLeaves: bool = False) -> Optional[npt.NDArray[np.double]]:
+    if pruneNewLeaves:
+        # afterwards, single-child branches can only result from the angle filter
+        for branch in reversed(list(breadthFirstSearch(stem))):
+            if len(branch.children) == 1:
+                branch.expand()
+
     branches = list(breadthFirstSearch(stem))
     trimmedPoints1 = filterByLength(branches, parameters["branchSizeThreshold"], parameters["resolution"])
 
     branches = list(breadthFirstSearch(stem))
     prunedBranches = pruneByAngle(branches, np.deg2rad(parameters["maxAngleThreshold"]))
 
-    trimmedPoints2 = filterByInfluence(branches, generateSearchRanges(branches, useMedianForStem=True))
+    trimmedPoints2 = filterByInfluence(branches, generateSearchRanges(branches, useMedianForStem=True, trimAllEnds=True))
 
     if pruneNewLeaves: # TODO: check this
         branches = list(breadthFirstSearch(stem))
@@ -169,7 +175,7 @@ def pruneLeafEnds(branches: List[Branch]) -> List[Branch]:
 
 def pruneThickeningLeaves(branches: List[Branch],
                           branchSizeThreshold: int,
-                          useSimpleSegmentRadii = True
+                          useSimpleSegmentRadii = False
                           ) -> npt.NDArray[np.double]:
     prunedPoints = []
 
@@ -196,8 +202,8 @@ def pruneThickeningLeaves(branches: List[Branch],
 
                 distances = np.linalg.norm(segmentPoints - skeletonPoint, axis=1)
                 baseDistances = np.abs(distanceAlongDirection(skeletonPoint, segmentPoints, segmentDirection))
-                pedalDistances = np.sqrt(distances ** 2 - baseDistances ** 2)
-                segmentRadii[skeletonIdx] = np.real(np.mean(pedalDistances))
+                pedalDistances = np.sqrt(np.maximum(distances ** 2 - baseDistances ** 2, 0.0))
+                segmentRadii[skeletonIdx] = np.mean(pedalDistances)
 
         breakIdx = movingTTest(segmentRadii)
         if breakIdx is None or breakIdx < branchSizeThreshold:

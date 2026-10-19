@@ -47,7 +47,8 @@ def buildSubtreeFromGraph(skeletonGraph: nx.DiGraph,
 
 def generateSearchRanges(branches: List[Branch], # have to be semi-ordered by distance from stem
                          useMedianForStem = False,
-                         useTrimming = True) -> Dict[Branch, float]:
+                         useTrimming = True,
+                         trimAllEnds = False) -> Dict[Branch, float]:
     searchRanges = {}
     for branch in branches:
         if branch.isRemoved:
@@ -57,7 +58,7 @@ def generateSearchRanges(branches: List[Branch], # have to be semi-ordered by di
         xp = array_module(branch.tlsPoints)
         distances = branch.getDistances(branch.tlsPoints,
                                         trimStart=useTrimming and branch.isStem(),
-                                        trimEnd=useTrimming and branch.isLeaf())
+                                        trimEnd=useTrimming and (trimAllEnds or branch.isLeaf()))
 
         if len(distances) == 0:
             searchRanges[branch] = np.nan
