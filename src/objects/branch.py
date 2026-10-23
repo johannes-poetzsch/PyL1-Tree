@@ -431,7 +431,7 @@ class Branch(BoundedObject):
         for branch, tlsPoints, od in zip(affectedBranches, pointsToReassign, originalDistances):
             if len(tlsPoints) == 0:
                 continue
-            prunedTlsPoints.append(Branch.assignLocalPoints(tlsPoints, branches, closeBranches=[branch],
+            prunedTlsPoints.append(Branch.assignLocalPoints(tlsPoints, branches, closeBranches=affectedBranches,
                                                             originalDistances=od,
                                                             useTrimming=useTrimming))
 
